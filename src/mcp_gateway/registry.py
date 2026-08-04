@@ -186,3 +186,11 @@ class ServerToolRegistry:
             raise RegistryLookupError(
                 f"tool '{identifier}' is not registered for server '{server_identifier}'"
             ) from error
+
+    def registered_servers(self) -> tuple[RegisteredServer, ...]:
+        """Return registered servers in deterministic identifier order."""
+        return tuple(self._servers[identifier] for identifier in sorted(self._servers))
+
+    def registered_tools(self) -> tuple[RegisteredTool, ...]:
+        """Return registered tools in deterministic server/tool order."""
+        return tuple(self._tools[key] for key in sorted(self._tools))
