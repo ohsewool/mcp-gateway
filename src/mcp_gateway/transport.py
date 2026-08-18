@@ -36,10 +36,21 @@ from .registry import RegisteredServer, RegisteredTool
 INVALID_REQUEST = -32600
 POLICY_DENIED = -32001
 INTEGRITY_VIOLATION = -32002
+CALL_TIMEOUT = -32005
+DUPLICATE_REQUEST = -32006
 
 
 class TransportError(ValueError):
     """Raised when a frame cannot be parsed safely."""
+
+
+class CallTimeout(TransportError):
+    """Raised when the server does not answer within the deadline.
+
+    Distinct from other transport errors because the outcome is genuinely
+    unknown: the request was already delivered, so the side effect may have
+    happened. Callers must not retry it blindly.
+    """
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -273,6 +284,7 @@ class StdioProxy:
         self._guard = guard
         self._process: Any = None
         self._pending: dict[Any, str] = {}
+        self._buffer = b""
 
     def __enter__(self) -> "StdioProxy":
         import subprocess
@@ -282,9 +294,7 @@ class StdioProxy:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            bufsize=1,
+            bufsize=0,
         )
         return self
 
@@ -308,6 +318,12 @@ class StdioProxy:
         """
         method = message.get("method")
         request_id = message.get("id")
+
+        if request_id is not None and request_id in self._pending:
+            return error_response(
+                request_id, DUPLICATE_REQUEST,
+                "gateway denied: a request with this id is already in flight",
+            )
 
         if self._guard is not None and method == "tools/call":
             held = self._guard.check(message)
@@ -344,10 +360,19 @@ class StdioProxy:
                     evidence={"observed": "server_response"},
                 )
                 return reply
-        except TransportError as error:
+        except CallTimeout as error:
             # The request left the gateway but no result was observed. The side
             # effect may or may not have happened: that is UNKNOWN, not a failure,
             # and it must not be retried without reconciliation.
+            self._pending.pop(request_id, None)
+            self._settle(request_id, state="UNKNOWN", evidence={"reason": str(error)})
+            return error_response(
+                request_id, CALL_TIMEOUT,
+                "gateway could not determine the outcome: the call timed out after dispatch",
+                {"outcome": "UNKNOWN", "requires": "reconciliation"},
+            )
+        except TransportError as error:
+            self._pending.pop(request_id, None)
             self._settle(request_id, state="UNKNOWN", evidence={"reason": str(error)})
             raise
 
@@ -358,13 +383,33 @@ class StdioProxy:
     def _write(self, message: Mapping[str, Any]) -> None:
         if self._process is None or self._process.stdin is None:
             raise TransportError("server process is not running")
-        self._process.stdin.write(encode_frame(message))
+        self._process.stdin.write(encode_frame(message).encode("utf-8"))
         self._process.stdin.flush()
 
     def _read(self, *, timeout: float) -> str:
+        """Read one frame, or raise once the deadline passes.
+
+        Frames are buffered here rather than by a text wrapper: ``select`` can
+        only observe the OS pipe, so a wrapper that read ahead would leave a
+        complete frame invisible and the call would appear to time out.
+        """
+        import select
+        import time
+
         if self._process is None or self._process.stdout is None:
             raise TransportError("server process is not running")
-        line = self._process.stdout.readline()
-        if not line:
-            raise TransportError("server closed the connection")
-        return line
+        deadline = time.monotonic() + timeout
+        while True:
+            if b"\n" in self._buffer:
+                line, self._buffer = self._buffer.split(b"\n", 1)
+                return line.decode("utf-8")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CallTimeout(f"no response within {timeout}s")
+            ready, _, _ = select.select([self._process.stdout], [], [], remaining)
+            if not ready:
+                continue
+            chunk = self._process.stdout.read(4096)
+            if not chunk:
+                raise TransportError("server closed the connection")
+            self._buffer += chunk
