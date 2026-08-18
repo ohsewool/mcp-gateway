@@ -1,5 +1,10 @@
 """Deterministic registration, policy, and live-protocol interception for MCP."""
 
+from .audit import (
+    AuditLog,
+    AuditReport,
+    verify_audit_log,
+)
 from .limits import (
     LimitDecision,
     LimitEnforcer,
@@ -35,6 +40,9 @@ from .registry import (
 )
 
 __all__ = [
+    "AuditLog",
+    "AuditReport",
+    "verify_audit_log",
     "LimitDecision",
     "LimitEnforcer",
     "RateLimit",

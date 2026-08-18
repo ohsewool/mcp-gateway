@@ -1,0 +1,189 @@
+"""Durable record of every gateway decision.
+
+The interceptor keeps its decisions in memory, which is enough to test with and
+useless afterwards: the questions people ask about an agent — what did it try,
+what was refused, who approved the one thing that went through — are asked days
+later, by someone who was not watching.
+
+The records are written as newline-delimited JSON with a SHA-256 chain, the same
+shape the core's evidence export uses, so a gateway log and a core ledger export
+can be verified by the same reader. Writing is append-only and flushed per
+record: a crash loses at most the call in flight, never the history.
+
+What this proves and does not prove: an edited, deleted, or reordered record
+breaks the chain and is reported with its line number. A log that was truncated
+at the end still verifies, because nothing inside a file can testify about what
+was removed after it — detecting that needs an anchor outside this process, which
+is the core's checkpoint work.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+GENESIS_HASH = "0" * 64
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _record_hash(body: Mapping[str, Any], previous_hash: str) -> str:
+    return hashlib.sha256(
+        previous_hash.encode("ascii") + _canonical(body).encode("utf-8")
+    ).hexdigest()
+
+
+@dataclass(frozen=True)
+class Violation:
+    line: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class AuditReport:
+    records: int
+    violations: tuple[Violation, ...]
+    tip_hash: str
+
+    @property
+    def ok(self) -> bool:
+        return not self.violations
+
+    def summary(self) -> str:
+        if self.ok:
+            return f"OK — {self.records} records, chain intact"
+        return "FAILED — " + "; ".join(
+            f"line {violation.line}: {violation.reason}" for violation in self.violations
+        )
+
+
+class AuditLog:
+    """Append-only, hash-chained record of interception decisions."""
+
+    def __init__(self, path: Path | str, *, session_id: str = "default",
+                 clock=None) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._session_id = session_id
+        self._clock = clock or (lambda: __import__("time").time())
+        self._sequence = 0
+        self._tip = GENESIS_HASH
+        if self.path.exists():
+            self._resume()
+
+    def _resume(self) -> None:
+        """Continue an existing log rather than starting a second chain in it."""
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            self._sequence = record["sequence"]
+            self._tip = record["integrity"]["record_hash"]
+
+    @property
+    def tip_hash(self) -> str:
+        return self._tip
+
+    def record(self, interception: Any, *, server_id: str) -> dict[str, Any]:
+        """Persist one decision. Accepts an InterceptionRecord or a mapping."""
+        source = interception if isinstance(interception, Mapping) else {
+            "direction": interception.direction,
+            "method": interception.method,
+            "request_id": interception.request_id,
+            "action": interception.action,
+            "reason_code": interception.reason_code,
+            "rule_id": interception.rule_id,
+            "detail": dict(interception.detail),
+        }
+        self._sequence += 1
+        body = {
+            "sequence": self._sequence,
+            "session_id": self._session_id,
+            "server_id": server_id,
+            "recorded_at": self._clock(),
+            **source,
+        }
+        sealed = dict(body)
+        sealed["integrity"] = {
+            "previous_hash": self._tip,
+            "record_hash": _record_hash(body, self._tip),
+        }
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(_canonical(sealed) + "\n")
+            handle.flush()
+        self._tip = sealed["integrity"]["record_hash"]
+        return sealed
+
+    def record_all(self, interceptions: Iterable[Any], *, server_id: str) -> int:
+        return sum(1 for item in interceptions if self.record(item, server_id=server_id))
+
+    def read(self) -> tuple[dict[str, Any], ...]:
+        if not self.path.exists():
+            return ()
+        return tuple(
+            json.loads(line)
+            for line in self.path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+
+
+def verify_audit_log(path: Path | str) -> AuditReport:
+    """Check a gateway audit log using only the file."""
+    path = Path(path)
+    if not path.exists():
+        return AuditReport(0, (Violation(0, "log does not exist"),), GENESIS_HASH)
+
+    violations: list[Violation] = []
+    previous = GENESIS_HASH
+    count = 0
+    last_sequence = 0
+
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        count += 1
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            violations.append(Violation(number, "record is not valid JSON"))
+            break
+        integrity = record.pop("integrity", None)
+        if not isinstance(integrity, dict):
+            violations.append(Violation(number, "record has no integrity block"))
+            break
+        if integrity.get("previous_hash") != previous:
+            violations.append(Violation(number, "chain is broken here"))
+        if integrity.get("record_hash") != _record_hash(record, integrity.get("previous_hash", "")):
+            violations.append(Violation(number, "record content was modified"))
+        sequence = record.get("sequence")
+        if isinstance(sequence, int):
+            if sequence != last_sequence + 1:
+                violations.append(
+                    Violation(number, f"sequence jumped from {last_sequence} to {sequence}")
+                )
+            last_sequence = sequence
+        previous = integrity.get("record_hash", "")
+
+    return AuditReport(count, tuple(violations), previous)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m mcp_gateway.audit verify <log.jsonl>``"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Verify a gateway audit log.")
+    parser.add_argument("command", choices=["verify"])
+    parser.add_argument("path")
+    arguments = parser.parse_args(argv)
+    report = verify_audit_log(arguments.path)
+    print(report.summary())
+    return 0 if report.ok else 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
