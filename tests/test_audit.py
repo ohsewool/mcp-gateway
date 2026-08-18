@@ -183,3 +183,125 @@ class TestGatewayFlow:
         log = AuditLog(tmp_path / "audit.jsonl", clock=Clock())
         log.record_all(gateway.records, server_id=SERVER_ID)
         assert log.read()[0]["reason_code"] == "explicit_deny"
+
+
+CORE = Path("/home/jovyan/work/agent-safety-core")
+if CORE.exists():
+    sys.path.insert(0, str(CORE))
+
+checkpoint_module = pytest.importorskip(
+    "core.checkpoint", reason="agent-safety-core is unavailable"
+)
+
+
+class TestExternalAnchoring:
+    """Truncation is undetectable inside a file; an anchor is what closes that."""
+
+    @pytest.fixture
+    def anchored(self, tmp_path):
+        from mcp_gateway.audit import anchor
+
+        log = AuditLog(tmp_path / "audit.jsonl", clock=Clock())
+        for index in range(4):
+            log.record(decision(request_id=index), server_id=SERVER_ID)
+
+        signer = checkpoint_module.Signer.generate()
+        witness = checkpoint_module.Witness(tmp_path / "witness.jsonl")
+        checkpoint = anchor(log, signer=signer, witness=witness,
+                            log_id="gateway-1", sequence=1, now=1000.0)
+        return {"log": log, "signer": signer, "witness": witness,
+                "checkpoint": checkpoint, "tmp": tmp_path}
+
+    def test_an_anchored_log_verifies(self, anchored):
+        from mcp_gateway.audit import verify_against_anchor
+
+        ok, notes = verify_against_anchor(
+            anchored["log"].path, anchored["checkpoint"],
+            public_key_pem=anchored["signer"].public_key_pem(),
+            witness=anchored["witness"],
+        )
+        assert ok, notes
+
+    def test_truncation_after_the_anchor_is_now_detected(self, anchored):
+        """The gap the standalone verifier documented, closed."""
+        from mcp_gateway.audit import verify_against_anchor
+
+        path = anchored["log"].path
+        lines = path.read_text(encoding="utf-8").splitlines()
+        path.write_text("\n".join(lines[:2]) + "\n", encoding="utf-8")
+
+        # The file alone still looks fine.
+        assert verify_audit_log(path).ok
+
+        ok, notes = verify_against_anchor(
+            path, anchored["checkpoint"],
+            public_key_pem=anchored["signer"].public_key_pem(),
+            witness=anchored["witness"],
+        )
+        assert not ok
+        assert any("does not end where the checkpoint" in note for note in notes)
+
+    def test_an_old_anchor_cannot_be_presented_as_current(self, anchored):
+        """Rollback: an authentic checkpoint from an earlier state."""
+        from mcp_gateway.audit import anchor, verify_against_anchor
+
+        stale = anchored["checkpoint"]
+        anchored["log"].record(decision(request_id=99), server_id=SERVER_ID)
+        anchor(anchored["log"], signer=anchored["signer"], witness=anchored["witness"],
+               log_id="gateway-1", sequence=2, previous=stale, now=2000.0)
+
+        ok, notes = verify_against_anchor(
+            anchored["log"].path, stale,
+            public_key_pem=anchored["signer"].public_key_pem(),
+            witness=anchored["witness"],
+        )
+        assert not ok
+        assert any("rollback" in note for note in notes)
+
+    def test_an_unpublished_anchor_is_rejected(self, anchored):
+        from mcp_gateway.audit import verify_against_anchor
+
+        unpublished = anchored["signer"].sign(
+            checkpoint_module.Checkpoint(
+                log_id="gateway-1", sequence=9,
+                journal_tip_hash=anchored["log"].tip_hash,
+                previous_checkpoint_hash="0" * 64, signed_at=3000.0,
+            )
+        )
+        ok, notes = verify_against_anchor(
+            anchored["log"].path, unpublished,
+            public_key_pem=anchored["signer"].public_key_pem(),
+            witness=anchored["witness"],
+        )
+        assert not ok
+        assert any("fork" in note for note in notes)
+
+    def test_each_failing_dimension_is_named_separately(self, anchored):
+        """'someone edited line 3' and 'this is an old copy' need different responses."""
+        from mcp_gateway.audit import verify_against_anchor
+
+        path = anchored["log"].path
+        lines = path.read_text(encoding="utf-8").splitlines()
+        record = json.loads(lines[0])
+        record["action"] = "tampered"
+        lines[0] = json.dumps(record, ensure_ascii=False, sort_keys=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        ok, notes = verify_against_anchor(
+            path, anchored["checkpoint"],
+            public_key_pem=anchored["signer"].public_key_pem(),
+            witness=anchored["witness"],
+        )
+        assert not ok
+        assert any("chain is broken" in note for note in notes)
+
+    def test_a_forged_signature_is_caught(self, anchored):
+        from mcp_gateway.audit import verify_against_anchor
+
+        ok, notes = verify_against_anchor(
+            anchored["log"].path, anchored["checkpoint"],
+            public_key_pem=checkpoint_module.Signer.generate().public_key_pem(),
+            witness=anchored["witness"],
+        )
+        assert not ok
+        assert any("signature" in note for note in notes)

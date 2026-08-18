@@ -12,9 +12,12 @@ record: a crash loses at most the call in flight, never the history.
 
 What this proves and does not prove: an edited, deleted, or reordered record
 breaks the chain and is reported with its line number. A log that was truncated
-at the end still verifies, because nothing inside a file can testify about what
-was removed after it — detecting that needs an anchor outside this process, which
-is the core's checkpoint work.
+at the end still verifies on its own, because nothing inside a file can testify
+about what was removed after it.
+
+`anchor()` closes that gap by publishing the log's tip to an external witness —
+the core's checkpoint machinery. Once a tip has been published, a shorter log
+that ends before it is detectably incomplete rather than merely smaller.
 """
 
 from __future__ import annotations
@@ -187,3 +190,67 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+# --------------------------------------------------------------- anchoring
+
+
+def anchor(log: "AuditLog", *, signer, witness, log_id: str, sequence: int,
+           previous=None, now: float) -> Any:
+    """Publish this log's tip to an external witness.
+
+    Delegates to the core's checkpoint format so a gateway log and a ledger
+    export are anchored the same way and read by the same verifier. Imported
+    lazily: the gateway must keep working without the core installed, and only
+    this one function needs it.
+    """
+    from core.checkpoint import Checkpoint  # noqa: PLC0415
+
+    checkpoint = Checkpoint(
+        log_id=log_id,
+        sequence=sequence,
+        journal_tip_hash=log.tip_hash,
+        previous_checkpoint_hash=previous.digest() if previous else "0" * 64,
+        signed_at=now,
+    )
+    signed = signer.sign(checkpoint)
+    witness.publish(signed)
+    return signed
+
+
+def verify_against_anchor(path: Path | str, checkpoint: Any, *, public_key_pem: bytes,
+                          witness) -> tuple[bool, tuple[str, ...]]:
+    """Check a log for internal consistency *and* for being the current one.
+
+    Returns (ok, notes). The second element names each failing dimension rather
+    than collapsing them, since "someone edited line 3" and "you are being shown
+    an old copy" call for different responses.
+    """
+    from core.checkpoint import verify_signature  # noqa: PLC0415
+
+    notes: list[str] = []
+    report = verify_audit_log(path)
+    if not report.ok:
+        notes.append(f"log chain is broken ({len(report.violations)} violation(s))")
+
+    if not verify_signature(checkpoint, public_key_pem):
+        notes.append("checkpoint signature is invalid")
+
+    if report.tip_hash != checkpoint.journal_tip_hash:
+        notes.append(
+            "the log does not end where the checkpoint says it should - "
+            "records after the anchored tip are missing or extra"
+        )
+
+    latest = witness.latest_sequence(checkpoint.log_id)
+    if latest is None:
+        notes.append("the witness has never seen this log")
+    elif checkpoint.sequence < latest:
+        notes.append(
+            f"rollback: the witness holds checkpoint {latest}, "
+            f"only {checkpoint.sequence} was presented"
+        )
+    elif checkpoint.sequence > latest:
+        notes.append(f"fork: checkpoint {checkpoint.sequence} was never published")
+
+    return (not notes), tuple(notes)
