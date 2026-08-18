@@ -1,5 +1,13 @@
 """Deterministic registration, policy, and live-protocol interception for MCP."""
 
+from .guard import (
+    APPROVAL_INVALID,
+    APPROVAL_REQUIRED,
+    ApprovalGuard,
+    ExecutionAuthority,
+    ScopeBinding,
+    canonical_digest,
+)
 from .transport import (
     GatewayInterceptor,
     Interception,
@@ -20,6 +28,12 @@ from .registry import (
 )
 
 __all__ = [
+    "APPROVAL_INVALID",
+    "APPROVAL_REQUIRED",
+    "ApprovalGuard",
+    "ExecutionAuthority",
+    "ScopeBinding",
+    "canonical_digest",
     "GatewayInterceptor",
     "Interception",
     "InterceptionRecord",

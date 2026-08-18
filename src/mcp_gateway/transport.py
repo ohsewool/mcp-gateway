@@ -261,9 +261,16 @@ class StdioProxy:
     response can be inspected in the context of the method that produced it.
     """
 
-    def __init__(self, interceptor: GatewayInterceptor, server_command: Sequence[str]) -> None:
+    def __init__(
+        self,
+        interceptor: GatewayInterceptor,
+        server_command: Sequence[str],
+        *,
+        guard: Any = None,
+    ) -> None:
         self._interceptor = interceptor
         self._command = tuple(server_command)
+        self._guard = guard
         self._process: Any = None
         self._pending: dict[Any, str] = {}
 
@@ -299,13 +306,22 @@ class StdioProxy:
         A blocked frame never reaches the server; the gateway's error response is
         returned instead.
         """
-        interception = self._interceptor.inspect_request(message)
-        if interception.reply is not None:
-            return interception.reply
-        assert interception.forward is not None
-
         method = message.get("method")
         request_id = message.get("id")
+
+        if self._guard is not None and method == "tools/call":
+            held = self._guard.check(message)
+            if held is not None and held.reply is not None:
+                return held.reply
+            message = self._guard.strip_lease(message)
+
+        interception = self._interceptor.inspect_request(message)
+        if interception.reply is not None:
+            # A claimed lease must not be left dangling when policy refuses later.
+            self._settle(request_id, state="FAILED",
+                         evidence={"reason": interception.record.reason_code})
+            return interception.reply
+        assert interception.forward is not None
         if request_id is not None and isinstance(method, str):
             self._pending[request_id] = method
 
@@ -313,14 +329,31 @@ class StdioProxy:
         if request_id is None:  # notification: no response expected
             return {}
 
-        while True:
-            raw = self._read(timeout=timeout)
-            frame = decode_frame(raw)
-            if frame.get("id") != request_id:
-                continue  # unrelated server-initiated traffic; ignore for the MVP
-            origin = self._pending.pop(request_id, None)
-            outcome = self._interceptor.inspect_response(frame, method=origin)
-            return outcome.reply if outcome.reply is not None else (outcome.forward or {})
+        try:
+            while True:
+                raw = self._read(timeout=timeout)
+                frame = decode_frame(raw)
+                if frame.get("id") != request_id:
+                    continue  # unrelated server-initiated traffic; ignore for the MVP
+                origin = self._pending.pop(request_id, None)
+                outcome = self._interceptor.inspect_response(frame, method=origin)
+                reply = outcome.reply if outcome.reply is not None else (outcome.forward or {})
+                self._settle(
+                    request_id,
+                    state="FAILED" if "error" in reply else "SUCCEEDED",
+                    evidence={"observed": "server_response"},
+                )
+                return reply
+        except TransportError as error:
+            # The request left the gateway but no result was observed. The side
+            # effect may or may not have happened: that is UNKNOWN, not a failure,
+            # and it must not be retried without reconciliation.
+            self._settle(request_id, state="UNKNOWN", evidence={"reason": str(error)})
+            raise
+
+    def _settle(self, request_id: Any, *, state: str, evidence: Mapping[str, Any]) -> None:
+        if self._guard is not None:
+            self._guard.settle(request_id, state=state, evidence=evidence)
 
     def _write(self, message: Mapping[str, Any]) -> None:
         if self._process is None or self._process.stdin is None:
