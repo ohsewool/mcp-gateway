@@ -1,5 +1,12 @@
 """Deterministic registration, policy, and live-protocol interception for MCP."""
 
+from .limits import (
+    LimitDecision,
+    LimitEnforcer,
+    RateLimit,
+    SessionRegistry,
+    SessionScope,
+)
 from .guard import (
     APPROVAL_INVALID,
     APPROVAL_REQUIRED,
@@ -28,6 +35,11 @@ from .registry import (
 )
 
 __all__ = [
+    "LimitDecision",
+    "LimitEnforcer",
+    "RateLimit",
+    "SessionRegistry",
+    "SessionScope",
     "APPROVAL_INVALID",
     "APPROVAL_REQUIRED",
     "ApprovalGuard",

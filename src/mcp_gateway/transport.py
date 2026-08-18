@@ -38,6 +38,7 @@ POLICY_DENIED = -32001
 INTEGRITY_VIOLATION = -32002
 CALL_TIMEOUT = -32005
 DUPLICATE_REQUEST = -32006
+RATE_LIMITED = -32007
 
 
 class TransportError(ValueError):
@@ -121,12 +122,14 @@ class GatewayInterceptor:
         baseline: MetadataSnapshot | None = None,
         baseline_servers: Sequence[RegisteredServer] = (),
         constraints_for: Callable[[str, Mapping[str, Any]], tuple] | None = None,
+        limiter: Any = None,
     ) -> None:
         self._policy = policy
         self._server_id = server_id
         self._baseline = baseline
         self._baseline_servers = tuple(baseline_servers)
         self._constraints_for = constraints_for or (lambda tool_id, arguments: ())
+        self._limiter = limiter
         self._records: list[InterceptionRecord] = []
 
     @property
@@ -163,6 +166,27 @@ class GatewayInterceptor:
         tool_id = params["name"]
         arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
 
+        if self._limiter is not None:
+            # Checked before the policy decision so a throttled call is never
+            # evaluated, and refused before anything is spent.
+            allowance = self._limiter.check(tool_id)
+            if not allowance.allowed:
+                record = self._log(
+                    InterceptionRecord("request", "tools/call", request_id, "blocked",
+                                       allowance.reason_code, detail={"tool": tool_id})
+                )
+                data: dict[str, Any] = {"tool": tool_id}
+                if allowance.retry_after is not None:
+                    data["retry_after"] = allowance.retry_after
+                if allowance.remaining is not None:
+                    data["budget_remaining"] = allowance.remaining
+                return Interception(
+                    None,
+                    error_response(request_id, RATE_LIMITED,
+                                   f"gateway refused tool call: {allowance.reason_code}", data),
+                    record,
+                )
+
         try:
             constraints = self._constraints_for(tool_id, arguments)
         except Exception:  # fail closed: a constraint mapper error must not forward
@@ -195,6 +219,8 @@ class GatewayInterceptor:
                 record,
             )
 
+        if self._limiter is not None:
+            self._limiter.consume(tool_id)
         record = self._log(
             InterceptionRecord("request", "tools/call", request_id, "forwarded",
                                decision.reason_code, decision.rule_id, {"tool": tool_id})
