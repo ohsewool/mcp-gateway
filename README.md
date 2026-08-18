@@ -3,7 +3,7 @@
 에이전트와 MCP 서버 **사이에 실제로 끼어드는** 프록시. 도구 호출이 서버에 닿기 전에 정책으로 판단하고, 위험한 호출은 사람 승인을 요구하며, 모든 결정을 실행 원장에 남긴다.
 
 ```
-[클라이언트/에이전트] ──stdio JSON-RPC──> [게이트웨이] ──stdio JSON-RPC──> [MCP 서버]
+[클라이언트/에이전트] ──JSON-RPC──> [게이트웨이] ──stdio 또는 HTTP──> [MCP 서버]
                                              │
                                              ├─ 정책: 이 호출을 허용하는가
                                              ├─ 무결성: 서버가 도구 설명을 바꿨는가
@@ -12,7 +12,7 @@
 ```
 
 ```bash
-python3 -m pytest tests/ -q                      # 110 tests
+python3 -m pytest tests/ -q                      # 124 tests
 python3 -m mcp_gateway.audit verify <log.jsonl>  # 감사 로그 검증
 python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 ```
@@ -53,6 +53,10 @@ python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 
 로컬 격리 환경에서 오픈소스 MCP 서버를 실행하는 것까지가 승인 범위다(`docs/PROJECT_SPEC.md` §1.1). 실서비스·실계정·실크리덴셜·프로덕션 배포는 범위 밖이며, 게이트웨이는 차단할 뿐 공격하지 않는다. 통합 테스트의 서버는 pytest 임시 디렉터리에 갇힌다.
 
-## 남은 작업
+## 전송 방식
 
-- HTTP 전송 지원 (현재 stdio만)
+stdio(자식 프로세스)와 HTTP(원격 엔드포인트) 둘 다 지원하며, **결정 파이프라인은 공유한다**. `HttpProxy.request is GatewayProxy.request`를 테스트로 고정해뒀는데, 전송을 하나 더 붙이면서 규칙이 슬쩍 약해지는 것이 이런 계층에서 가장 흔한 사고이기 때문이다.
+
+네트워크에서만 생기는 두 가지는 파이프와 같은 원칙으로 다룬다: 타임아웃도, HTTP 오류 상태도 "요청은 전달됐으므로 결과를 모른다"는 뜻이라 실패가 아니라 UNKNOWN이다. 그리고 stdio와 달리 응답 하나만 오므로, id가 안 맞는 응답은 건너뛰지 않고 거부한다 — 귀속할 수 없는 응답이기 때문이다.
+
+## 남은 작업

@@ -289,52 +289,24 @@ class GatewayInterceptor:
         return compare_metadata(self._baseline, current)
 
 
-class StdioProxy:
-    """Relays newline-delimited JSON-RPC between a client and a server process.
+class GatewayProxy:
+    """The decision pipeline, independent of how bytes reach the server.
 
-    The proxy owns the I/O and delegates every decision to
-    :class:`GatewayInterceptor`.  It is deliberately synchronous and
-    single-threaded: request/response pairing is tracked by ``id`` so that a
-    response can be inspected in the context of the method that produced it.
+    Every rule the gateway enforces lives here so a second transport cannot
+    quietly enforce a weaker version of it: the same guard, the same policy
+    interception, the same settlement of outcomes. A transport supplies only
+    ``_dispatch``, which sends one frame and returns the matching reply.
     """
 
-    def __init__(
-        self,
-        interceptor: GatewayInterceptor,
-        server_command: Sequence[str],
-        *,
-        guard: Any = None,
-    ) -> None:
+    def __init__(self, interceptor: GatewayInterceptor, *, guard: Any = None) -> None:
         self._interceptor = interceptor
-        self._command = tuple(server_command)
         self._guard = guard
-        self._process: Any = None
         self._pending: dict[Any, str] = {}
-        self._buffer = b""
 
-    def __enter__(self) -> "StdioProxy":
-        import subprocess
-
-        self._process = subprocess.Popen(
-            self._command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            bufsize=0,
-        )
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        if self._process is None:
-            return
-        try:
-            if self._process.stdin and not self._process.stdin.closed:
-                self._process.stdin.close()
-            self._process.wait(timeout=5)
-        except Exception:
-            self._process.kill()
-        finally:
-            self._process = None
+    def _dispatch(self, message: Mapping[str, Any], *, request_id: Any,
+                  timeout: float) -> dict[str, Any] | None:
+        """Send one frame and return the reply, or None when none is expected."""
+        raise NotImplementedError
 
     def request(self, message: Mapping[str, Any], *, timeout: float = 10.0) -> dict[str, Any]:
         """Send one client frame through the gateway and return the client's reply.
@@ -367,25 +339,20 @@ class StdioProxy:
         if request_id is not None and isinstance(method, str):
             self._pending[request_id] = method
 
-        self._write(interception.forward)
-        if request_id is None:  # notification: no response expected
-            return {}
-
         try:
-            while True:
-                raw = self._read(timeout=timeout)
-                frame = decode_frame(raw)
-                if frame.get("id") != request_id:
-                    continue  # unrelated server-initiated traffic; ignore for the MVP
-                origin = self._pending.pop(request_id, None)
-                outcome = self._interceptor.inspect_response(frame, method=origin)
-                reply = outcome.reply if outcome.reply is not None else (outcome.forward or {})
-                self._settle(
-                    request_id,
-                    state="FAILED" if "error" in reply else "SUCCEEDED",
-                    evidence={"observed": "server_response"},
-                )
-                return reply
+            frame = self._dispatch(interception.forward, request_id=request_id,
+                                   timeout=timeout)
+            if frame is None:
+                return {}
+            origin = self._pending.pop(request_id, None)
+            outcome = self._interceptor.inspect_response(frame, method=origin)
+            reply = outcome.reply if outcome.reply is not None else (outcome.forward or {})
+            self._settle(
+                request_id,
+                state="FAILED" if "error" in reply else "SUCCEEDED",
+                evidence={"observed": "server_response"},
+            )
+            return reply
         except CallTimeout as error:
             # The request left the gateway but no result was observed. The side
             # effect may or may not have happened: that is UNKNOWN, not a failure,
@@ -405,6 +372,57 @@ class StdioProxy:
     def _settle(self, request_id: Any, *, state: str, evidence: Mapping[str, Any]) -> None:
         if self._guard is not None:
             self._guard.settle(request_id, state=state, evidence=evidence)
+
+
+class StdioProxy(GatewayProxy):
+    """Relays newline-delimited JSON-RPC to a server running as a child process."""
+
+    def __init__(
+        self,
+        interceptor: GatewayInterceptor,
+        server_command: Sequence[str],
+        *,
+        guard: Any = None,
+    ) -> None:
+        super().__init__(interceptor, guard=guard)
+        self._command = tuple(server_command)
+        self._process: Any = None
+        self._buffer = b""
+
+    def __enter__(self) -> "StdioProxy":
+        import subprocess
+
+        self._process = subprocess.Popen(
+            self._command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._process is None:
+            return
+        try:
+            if self._process.stdin and not self._process.stdin.closed:
+                self._process.stdin.close()
+            self._process.wait(timeout=5)
+        except Exception:
+            self._process.kill()
+        finally:
+            self._process = None
+
+    def _dispatch(self, message: Mapping[str, Any], *, request_id: Any,
+                  timeout: float) -> dict[str, Any] | None:
+        self._write(message)
+        if request_id is None:  # notification: no response expected
+            return None
+        while True:
+            frame = decode_frame(self._read(timeout=timeout))
+            if frame.get("id") != request_id:
+                continue  # unrelated server-initiated traffic; ignore for the MVP
+            return frame
 
     def _write(self, message: Mapping[str, Any]) -> None:
         if self._process is None or self._process.stdin is None:
@@ -439,3 +457,86 @@ class StdioProxy:
             if not chunk:
                 raise TransportError("server closed the connection")
             self._buffer += chunk
+
+
+class HttpProxy(GatewayProxy):
+    """Relays JSON-RPC to a server that speaks HTTP rather than stdio.
+
+    The same pipeline as :class:`StdioProxy` — it inherits every decision — so
+    moving a deployment from a child process to a remote endpoint cannot quietly
+    weaken what the gateway enforces. Only the transport differs.
+
+    Two things change with the network that a pipe did not have. A remote server
+    can answer slowly for reasons that are not its fault, and it can answer with
+    an HTTP status instead of a JSON-RPC error. Both are treated the way a lost
+    pipe response is: the request was delivered, so an unobserved result is
+    UNKNOWN rather than a failure.
+
+    ``opener`` is injected so the transport can be exercised without a network.
+    """
+
+    def __init__(
+        self,
+        interceptor: GatewayInterceptor,
+        endpoint: str,
+        *,
+        guard: Any = None,
+        headers: Mapping[str, str] | None = None,
+        opener: Any = None,
+    ) -> None:
+        super().__init__(interceptor, guard=guard)
+        if not endpoint.startswith(("http://", "https://")):
+            raise TransportError("endpoint must be an http or https URL")
+        self._endpoint = endpoint
+        self._headers = dict(headers or {})
+        self._opener = opener
+
+    def __enter__(self) -> "HttpProxy":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def _dispatch(self, message: Mapping[str, Any], *, request_id: Any,
+                  timeout: float) -> dict[str, Any] | None:
+        body = encode_frame(message).encode("utf-8")
+        raw = self._post(body, timeout=timeout)
+        if request_id is None:
+            return None
+        if not raw.strip():
+            raise TransportError("server returned an empty body")
+        frame = decode_frame(raw)
+        if frame.get("id") != request_id:
+            # Unlike stdio there is no stream to skip ahead in: one request, one
+            # response. A mismatched id means the reply cannot be attributed.
+            raise TransportError(
+                f"response id {frame.get('id')!r} does not match request {request_id!r}"
+            )
+        return frame
+
+    def _post(self, body: bytes, *, timeout: float) -> str:
+        import urllib.error
+        import urllib.request
+
+        if self._opener is not None:
+            return self._opener(self._endpoint, body, timeout)
+
+        request = urllib.request.Request(
+            self._endpoint, data=body, method="POST",
+            headers={"Content-Type": "application/json",
+                     "Accept": "application/json", **self._headers},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            # The server was reached and refused. Whether it acted first is not
+            # knowable from the status alone.
+            raise TransportError(f"server returned HTTP {error.code}") from error
+        except TimeoutError as error:
+            raise CallTimeout(f"no response within {timeout}s") from error
+        except urllib.error.URLError as error:
+            reason = getattr(error, "reason", error)
+            if isinstance(reason, TimeoutError):
+                raise CallTimeout(f"no response within {timeout}s") from error
+            raise TransportError(f"could not reach the server: {reason}") from error
