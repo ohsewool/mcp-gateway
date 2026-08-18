@@ -47,7 +47,7 @@ python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 
 ## 코어와의 관계
 
-승인·lease·결과 기록은 이 저장소가 직접 구현하지 않고 [`agent-safety-core`](../agent-safety-core)의 실행 원장에 위임한다. 게이트웨이는 `ExecutionAuthority` 포트만 알며, 원자적 lease 소비가 외부 호출보다 **먼저** durable commit된다는 보장이 "동일 lease는 최대 1회 dispatch"를 성립시킨다. 코어가 없으면 정책·무결성 계층만으로도 동작한다(승인 테스트는 skip).
+승인·lease·결과 기록은 이 저장소가 직접 구현하지 않고 [`agent-safety-core`](https://github.com/ohsewool/agent-safety-core)의 실행 원장에 위임한다. 게이트웨이는 `ExecutionAuthority` 포트만 알며, 원자적 lease 소비가 외부 호출보다 **먼저** durable commit된다는 보장이 "동일 lease는 최대 1회 dispatch"를 성립시킨다. 코어가 없으면 정책·무결성 계층만으로도 동작한다(승인 테스트는 skip).
 
 ## 안전 경계
 
@@ -60,3 +60,11 @@ stdio(자식 프로세스)와 HTTP(원격 엔드포인트) 둘 다 지원하며,
 네트워크에서만 생기는 두 가지는 파이프와 같은 원칙으로 다룬다: 타임아웃도, HTTP 오류 상태도 "요청은 전달됐으므로 결과를 모른다"는 뜻이라 실패가 아니라 UNKNOWN이다. 그리고 stdio와 달리 응답 하나만 오므로, id가 안 맞는 응답은 건너뛰지 않고 거부한다 — 귀속할 수 없는 응답이기 때문이다.
 
 ## 남은 작업
+
+- **서버 다양화** — 통합 테스트가 `server-filesystem` 하나에만 걸려 있다. 부작용의 형태가 다른 서버(네트워크 호출, 상태 변경 API)에서 같은 보장이 성립하는지는 아직 증명되지 않았다.
+- **정책 표현력** — 지금은 도구 단위 allow/deny와 인자 digest다. "이 경로 아래만", "이 금액 이하만" 같은 조건부 허용은 표현할 수 없다.
+- **Windows 검증** — 직렬화 계층이 POSIX에서만 검증됐다.
+
+## 라이선스
+
+Apache License 2.0. [`LICENSE`](LICENSE) 참조.
