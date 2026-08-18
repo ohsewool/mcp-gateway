@@ -1,5 +1,14 @@
-"""Deterministic registration primitives for synthetic MCP servers and tools."""
+"""Deterministic registration, policy, and live-protocol interception for MCP."""
 
+from .transport import (
+    GatewayInterceptor,
+    Interception,
+    InterceptionRecord,
+    StdioProxy,
+    TransportError,
+    decode_frame,
+    encode_frame,
+)
 from .registry import (
     RegisteredServer,
     RegisteredTool,
@@ -11,6 +20,13 @@ from .registry import (
 )
 
 __all__ = [
+    "GatewayInterceptor",
+    "Interception",
+    "InterceptionRecord",
+    "StdioProxy",
+    "TransportError",
+    "decode_frame",
+    "encode_frame",
     "RegisteredServer",
     "RegisteredTool",
     "RegistryConflictError",

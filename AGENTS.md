@@ -8,7 +8,7 @@ Build and evaluate an MCP-aware proxy gateway at the host boundary that improves
 
 - `docs/PROJECT_SPEC.md` is the approved scope baseline.
 - Deterministic policy enforcement is the authoritative control. Heuristic or LLM-derived risk signals, if separately approved, may only be non-authoritative secondary signals.
-- Use only isolated synthetic MCP servers, synthetic data, and mock credentials.
+- Use isolated MCP servers (synthetic fixtures, or open-source server implementations launched locally in this sandbox), synthetic data, and mock credentials. Real protocol traffic against a locally launched server is approved as of the 2026-08-19 scope revision (`docs/PROJECT_SPEC.md` §1.1); real services, accounts, and external targets remain prohibited.
 - Never target real services, accounts, devices, production systems, or external targets.
 - Never use real secrets, implement offensive exploitation, deploy to production, or add paid APIs.
 - Do not add threat scenarios, integrations, dependencies, or scope beyond the approved specification without recording the request under `NEEDS_APPROVAL` in `docs/TASKS.md` and obtaining approval.
@@ -27,4 +27,4 @@ Build and evaluate an MCP-aware proxy gateway at the host boundary that improves
 
 ## Current phase
 
-The project is specification-approved and documentation-complete for planning. Full application implementation is not authorized by this documentation update.
+Real-protocol implementation phase (2026-08-19). The deterministic core (registry, policy, metadata integrity) is implemented and tested. Current work: a real stdio JSON-RPC transport that wires that core into live `tools/call` traffic, evaluated against a locally launched open-source MCP server.

@@ -4,7 +4,23 @@
 
 Build and evaluate an MCP-aware proxy gateway positioned at the host boundary that improves the security, authorization control, reliability, and auditability of MCP tool usage.
 
-The gateway will mediate interactions between an MCP host/client and isolated synthetic MCP servers. It will make deterministic, inspectable decisions before tool execution and apply bounded runtime protections around permitted calls.
+The gateway will mediate interactions between an MCP host/client and MCP servers. It will make deterministic, inspectable decisions before tool execution and apply bounded runtime protections around permitted calls.
+
+### 1.1 Scope revision (2026-08-19): real protocol traffic
+
+The original scope limited the testbed to *synthetic* MCP servers described as data structures, with no real protocol messages. That limit is lifted for the following, and only the following:
+
+- The gateway MAY implement the real MCP wire protocol (JSON-RPC 2.0 over stdio) and relay live messages.
+- The gateway MAY run **open-source MCP server implementations** (e.g. the reference filesystem server) as local child processes inside this isolated development environment, and exercise them with real traffic.
+
+The safety boundary is unchanged and still binding:
+
+- No real services, accounts, production systems, or external targets. Servers run locally against throwaway directories created by the test suite.
+- No real credentials or secrets. No production deployment.
+- Deterministic policy enforcement remains the authoritative control; the transport layer never overrides a policy decision.
+- Offensive exploitation remains out of scope. The gateway blocks; it does not attack.
+
+Rationale: the approved capabilities (metadata integrity, deny-by-default authorization, duplicate-execution protection) cannot be evaluated for real-world validity against data structures alone. Live protocol traffic is required evidence, and running a local open-source server in an isolated sandbox introduces no real-world target.
 
 ## 2. Approved core capabilities
 
@@ -38,7 +54,8 @@ No additional threat or failure scenario is in scope without approval.
 The minimum viable research artifact consists of:
 
 - one local gateway process;
-- one or more isolated synthetic MCP servers;
+- a real stdio JSON-RPC transport that relays `initialize`, `tools/list`, and `tools/call` between a client and a locally launched MCP server;
+- one or more isolated MCP servers (synthetic fixtures for unit tests, real open-source servers for integration evidence);
 - controlled server and tool registration;
 - metadata and schema integrity checks;
 - an authoritative deterministic policy engine;
