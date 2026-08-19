@@ -12,7 +12,7 @@
 ```
 
 ```bash
-python3 -m pytest tests/ -q                      # 124 tests
+python3 -m pytest tests/ -q                      # 146 tests
 python3 -m mcp_gateway.audit verify <log.jsonl>  # 감사 로그 검증
 python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 ```
