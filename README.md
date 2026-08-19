@@ -80,3 +80,12 @@ stdio(자식 프로세스)와 HTTP(원격 엔드포인트) 둘 다 지원하며,
 ## 라이선스
 
 Apache License 2.0. [`LICENSE`](LICENSE) 참조.
+
+## 함께 보기
+
+이 저장소는 다섯 개 중 하나다. 전체 지도와 각각이 무엇을 발견했는지는 [프로필](https://github.com/ohsewool)에 있다.
+
+- [`agent-safety-core`](https://github.com/ohsewool/agent-safety-core) — 승인과 실행의 결속 · 1회용 lease · UNKNOWN_OUTCOME
+- [`modelmate`](https://github.com/ohsewool/modelmate) — 증거가 없으면 확신하지 않는 모델링 도우미
+- [`rag-profile-selector`](https://github.com/ohsewool/rag-profile-selector) — 인용이 어디를 가리키는지 측정 · 한국어 법령 코퍼스
+- [`document-intelligence`](https://github.com/ohsewool/document-intelligence) — 파서에 의존하지 않는 문서 증거 모델
