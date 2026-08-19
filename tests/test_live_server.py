@@ -269,3 +269,83 @@ def test_consequential_write_requires_approval_then_happens_exactly_once(workspa
             )
     finally:
         ledger.close()
+
+
+@requires_server
+def test_a_failing_tool_is_recorded_as_failed_not_succeeded(workspace: Path):
+    """Two ways an MCP call fails, and only one is a JSON-RPC error.
+
+    A tool that runs and fails returns no top-level `error` at all: the result
+    carries `isError: true` and the message sits in its content. Reading only
+    the top-level member recorded such a call as SUCCEEDED - the opposite of
+    what a ledger exists to say, and the basis on which a retry decision would
+    later be made.
+    """
+    from mcp_gateway.transport import _outcome_of
+
+    with make_proxy(workspace) as proxy:
+        initialize(proxy)
+        response = proxy.request(
+            {
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "read_text_file",
+                           "arguments": {"path": str(workspace / "absent.txt")}},
+            },
+            timeout=60,
+        )
+
+    # The server reports the failure inside a successful JSON-RPC response.
+    assert "error" not in response
+    assert response["result"]["isError"] is True
+
+    outcome = _outcome_of(response)
+    assert outcome["state"] == "FAILED"
+    assert outcome["evidence"]["observed"] == "tool_error"
+    assert "ENOENT" in outcome["evidence"]["message"] or outcome["evidence"]["message"]
+
+
+@requires_server
+def test_a_succeeding_tool_is_still_recorded_as_succeeded(workspace: Path):
+    """The fix must not turn every call into a failure."""
+    from mcp_gateway.transport import _outcome_of
+
+    with make_proxy(workspace) as proxy:
+        initialize(proxy)
+        response = proxy.request(
+            {
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "read_text_file",
+                           "arguments": {"path": str(workspace / "allowed.txt")}},
+            },
+            timeout=60,
+        )
+    assert _outcome_of(response)["state"] == "SUCCEEDED"
+
+
+def test_a_protocol_error_is_distinguished_from_a_tool_error():
+    """"The server refused the request" and "the tool ran and failed" need
+    different responses from whoever reads the ledger."""
+    from mcp_gateway.transport import _outcome_of
+
+    protocol = _outcome_of({"jsonrpc": "2.0", "id": 1,
+                            "error": {"code": -32601, "message": "Method not found"}})
+    assert protocol["state"] == "FAILED"
+    assert protocol["evidence"]["observed"] == "jsonrpc_error"
+    assert protocol["evidence"]["code"] == -32601
+
+    tool = _outcome_of({"jsonrpc": "2.0", "id": 1,
+                        "result": {"isError": True,
+                                   "content": [{"type": "text", "text": "disk full"}]}})
+    assert tool["evidence"]["observed"] == "tool_error"
+    assert "disk full" in tool["evidence"]["message"]
+
+
+def test_a_result_without_iserror_is_a_success():
+    from mcp_gateway.transport import _outcome_of
+    assert _outcome_of({"result": {"content": []}})["state"] == "SUCCEEDED"
+
+
+def test_iserror_false_is_not_treated_as_an_error():
+    """Explicitly false must not be confused with present-and-truthy."""
+    from mcp_gateway.transport import _outcome_of
+    assert _outcome_of({"result": {"isError": False}})["state"] == "SUCCEEDED"

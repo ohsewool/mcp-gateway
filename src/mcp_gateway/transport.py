@@ -85,6 +85,42 @@ def error_response(request_id: Any, code: int, message: str, data: Any = None) -
     return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
+def _outcome_of(reply: Mapping[str, Any]) -> dict[str, Any]:
+    """What the ledger should record for this response.
+
+    Two ways an MCP call fails, and only one of them is a JSON-RPC error.
+
+    A protocol-level failure - unknown method, malformed request - comes back
+    with an `error` member. A *tool* failure does not: the call succeeded as
+    far as JSON-RPC is concerned and the result carries `isError: true`, with
+    the message in its content. Reading only the top-level `error` therefore
+    recorded a tool that failed as SUCCEEDED, which is the opposite of what the
+    ledger exists to say. Verified against the reference filesystem server:
+    reading a missing file returns no `error` field and `result.isError` true.
+
+    The distinction is kept in the evidence rather than flattened, because
+    "the server refused the request" and "the tool ran and failed" call for
+    different responses from whoever reads this later.
+    """
+    if "error" in reply:
+        return {"state": "FAILED",
+                "evidence": {"observed": "jsonrpc_error",
+                             "code": (reply.get("error") or {}).get("code")}}
+
+    result = reply.get("result")
+    if isinstance(result, Mapping) and result.get("isError") is True:
+        message = ""
+        content = result.get("content")
+        if isinstance(content, list):
+            message = " ".join(
+                str(part.get("text", "")) for part in content if isinstance(part, Mapping)
+            )[:500]
+        return {"state": "FAILED",
+                "evidence": {"observed": "tool_error", "message": message}}
+
+    return {"state": "SUCCEEDED", "evidence": {"observed": "server_response"}}
+
+
 @dataclass(frozen=True)
 class InterceptionRecord:
     """One audit-relevant decision made by the gateway."""
@@ -347,11 +383,7 @@ class GatewayProxy:
             origin = self._pending.pop(request_id, None)
             outcome = self._interceptor.inspect_response(frame, method=origin)
             reply = outcome.reply if outcome.reply is not None else (outcome.forward or {})
-            self._settle(
-                request_id,
-                state="FAILED" if "error" in reply else "SUCCEEDED",
-                evidence={"observed": "server_response"},
-            )
+            self._settle(request_id, **_outcome_of(reply))
             return reply
         except CallTimeout as error:
             # The request left the gateway but no result was observed. The side

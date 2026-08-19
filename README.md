@@ -15,7 +15,7 @@
 
 ```bash
 pip install -e .                                   # src/ 레이아웃이라 설치 없이는 import되지 않는다
-python3 -m pytest tests/ -q                      # 155 tests
+python3 -m pytest tests/ -q                      # 160 tests
 python3 -m mcp_gateway.audit verify <log.jsonl>  # 감사 로그 검증
 python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 ```
@@ -27,6 +27,8 @@ python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 **rug-pull 탐지** — 서버가 등록 이후 도구의 설명이나 입력 스키마를 조용히 바꾸면 `tools/list` 응답을 차단한다. 도구 설명은 모델이 읽는 지시문이므로, 그것이 바뀌었다는 것은 도구가 바뀐 것과 같다.
 
 **JIT 승인** — 결과가 되돌릴 수 없는 도구는 보류된다. 게이트웨이가 요청 범위의 digest를 계산해 실행 의도를 원장에 기록하고, 사람이 승인하면 1회용 lease가 발급된다. 재시도 시 digest를 다시 계산해 **일치할 때만** 통과한다. 인자를 바꿔치기하면 승인이 무효가 되고, 소비된 lease는 두 번째 실행을 만들지 못한다.
+
+**실패를 실패로 기록** — MCP에서 호출이 실패하는 길은 둘인데 그중 하나만 JSON-RPC 오류다. 프로토콜 수준 실패는 `error` 멤버로 오지만, **도구가 실행되고 실패하면 `error`가 아예 없고** `result.isError: true`에 메시지가 담겨 온다. 최상위 `error`만 보면 실패한 도구가 SUCCEEDED로 원장에 남는다 — 무슨 일이 있었는지 알기 위해 존재하는 기록이 반대를 말하고, 나중의 재시도 판단이 그 위에서 이뤄진다. 실서버로 확인했다: 없는 파일을 읽으면 `error` 없이 `isError`만 온다. 둘을 뭉개지 않고 증적에 구분해 남긴다 — "서버가 요청을 거부했다"와 "도구가 돌고 실패했다"는 읽는 사람에게 다른 대응을 요구한다.
 
 **정직한 타임아웃** — 응답이 없으면 실패로 기록하지 않는다. 요청은 이미 전달됐으므로 부작용이 일어났을 수 있다. `UNKNOWN`으로 분류하고 클라이언트에 reconciliation이 필요하다고 알린다. 재시도를 유도하지 않는 것이 핵심이다.
 
