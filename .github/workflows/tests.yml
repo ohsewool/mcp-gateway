@@ -40,6 +40,13 @@ jobs:
           repository: ohsewool/agent-safety-core
           path: .sibling/agent-safety-core
 
+      # Checking the sibling out is not the same as being able to import it.
+      # The core signs checkpoints, so it needs cryptography; without it the
+      # import fails and its dependents skip exactly as if the repository were
+      # absent.
+      - name: Install the sibling's requirements
+        run: pip install -r .sibling/agent-safety-core/requirements.txt
+
       - name: Fetch the MCP server the integration tests talk to
         run: npx -y @modelcontextprotocol/server-filesystem --version || true
 
