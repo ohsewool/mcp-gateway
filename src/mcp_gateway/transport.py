@@ -383,9 +383,23 @@ class StdioProxy(GatewayProxy):
         server_command: Sequence[str],
         *,
         guard: Any = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
+        """`env` is the child server's entire environment when supplied.
+
+        Left unset, the server inherits the gateway's environment - which is
+        every credential the gateway process happens to hold. A component whose
+        job is to stand between an agent and a server it does not trust should
+        not hand that server its own secrets on the way past, and until this
+        parameter existed there was no way not to.
+
+        The default is unchanged, because changing it would break every caller
+        whose server needs PATH or HOME to start. What is new is the ability to
+        say what the server gets.
+        """
         super().__init__(interceptor, guard=guard)
         self._command = tuple(server_command)
+        self._env = dict(env) if env is not None else None
         self._process: Any = None
         self._buffer = b""
 
@@ -398,6 +412,7 @@ class StdioProxy(GatewayProxy):
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             bufsize=0,
+            env=self._env,
         )
         return self
 
