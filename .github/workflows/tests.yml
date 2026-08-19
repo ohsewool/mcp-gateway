@@ -29,12 +29,23 @@ jobs:
           node-version: "22"
 
       - name: Install
-        run: pip install pytest
+        run: pip install -r requirements.txt
+
+      # The approval and cross-store tests delegate to the core's ledger. Absent
+      # it, 35 of them skip and the run still passes - the exact silence this
+      # workflow exists to break.
+      - name: Check out agent-safety-core
+        uses: actions/checkout@v4
+        with:
+          repository: ohsewool/agent-safety-core
+          path: .sibling/agent-safety-core
 
       - name: Fetch the MCP server the integration tests talk to
         run: npx -y @modelcontextprotocol/server-filesystem --version || true
 
       - name: Refuse a silently shrinking suite
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.sibling/agent-safety-core
         run: |
           collected=$(python -m pytest --collect-only -q 2>/dev/null \
             | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+')
@@ -46,4 +57,6 @@ jobs:
           fi
 
       - name: Run the suite
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.sibling/agent-safety-core
         run: python -m pytest -q
