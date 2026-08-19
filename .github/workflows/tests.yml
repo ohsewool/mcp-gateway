@@ -44,15 +44,17 @@ jobs:
       # The core signs checkpoints, so it needs cryptography; without it the
       # import fails and its dependents skip exactly as if the repository were
       # absent.
-      - name: Install the sibling's requirements
-        run: pip install -r .sibling/agent-safety-core/requirements.txt
+      - name: Install the sibling
+        # Installed rather than reached into with PYTHONPATH: that only worked
+        # because the core happened to sit importable at its repository root,
+        # and it left the core's own dependencies to be guessed at - which cost
+        # 21 tests until cryptography was added by hand.
+        run: pip install -e .sibling/agent-safety-core
 
       - name: Fetch the MCP server the integration tests talk to
         run: npx -y @modelcontextprotocol/server-filesystem --version || true
 
       - name: Refuse a silently shrinking suite
-        env:
-          PYTHONPATH: ${{ github.workspace }}/.sibling/agent-safety-core
         run: |
           collected=$(python -m pytest --collect-only -q 2>/dev/null \
             | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+')
@@ -64,6 +66,4 @@ jobs:
           fi
 
       - name: Run the suite
-        env:
-          PYTHONPATH: ${{ github.workspace }}/.sibling/agent-safety-core
         run: python -m pytest -q -rs   # -rs names every skip and why
