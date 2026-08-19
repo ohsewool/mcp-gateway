@@ -188,9 +188,6 @@ def test_metadata_drift_from_real_server_is_detected(workspace: Path):
 
 # --------------------------------------------------------------- JIT approval
 
-CORE = Path("/home/jovyan/work/agent-safety-core")
-if CORE.exists():
-    sys.path.insert(0, str(CORE))
 
 try:
     from core.ledger import ExecutionLedger  # noqa: E402

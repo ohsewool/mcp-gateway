@@ -141,11 +141,19 @@ class TestNetworkFailures:
 
 class TestGuardIntegration:
     def test_the_guard_holds_a_consequential_call_before_any_request(self):
-        core = Path("/home/jovyan/work/agent-safety-core")
-        if not core.exists():
-            pytest.skip("agent-safety-core is unavailable")
-        sys.path.insert(0, str(core))
-        from core.ledger import ExecutionLedger
+        """Skipped by asking whether the module imports, not whether a path exists.
+
+        This checked for /home/jovyan/work/agent-safety-core - one machine's
+        layout. Anywhere else the directory is absent and the test skips
+        silently; on that machine with the package uninstalled the directory is
+        present, the import still fails, and the test errors. It was the only
+        one of the five core-dependent tests here that did not use
+        `importorskip`, and the only one that broke when the core was genuinely
+        unavailable.
+        """
+        ledger_module = pytest.importorskip(
+            "core.ledger", reason="agent-safety-core is unavailable")
+        ExecutionLedger = ledger_module.ExecutionLedger
         from mcp_gateway.guard import APPROVAL_REQUIRED, ApprovalGuard
 
         import tempfile

@@ -20,10 +20,6 @@ from mcp_gateway.guard import (  # noqa: E402
     canonical_digest,
 )
 
-CORE = Path("/home/jovyan/work/agent-safety-core")
-if CORE.exists():
-    sys.path.insert(0, str(CORE))
-
 ledger_module = pytest.importorskip("core.ledger", reason="agent-safety-core is unavailable")
 ExecutionLedger = ledger_module.ExecutionLedger
 

@@ -185,9 +185,6 @@ class TestGatewayFlow:
         assert log.read()[0]["reason_code"] == "explicit_deny"
 
 
-CORE = Path("/home/jovyan/work/agent-safety-core")
-if CORE.exists():
-    sys.path.insert(0, str(CORE))
 
 checkpoint_module = pytest.importorskip(
     "core.checkpoint", reason="agent-safety-core is unavailable"

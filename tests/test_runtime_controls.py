@@ -21,9 +21,6 @@ from mcp_gateway.transport import (  # noqa: E402
     StdioProxy,
 )
 
-CORE = Path("/home/jovyan/work/agent-safety-core")
-if CORE.exists():
-    sys.path.insert(0, str(CORE))
 
 SERVER_ID = "fake-server"
 
