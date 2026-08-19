@@ -35,6 +35,18 @@ def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _integrity_hash(integrity: Mapping[str, Any]) -> str | None:
+    """The record hash, whichever of the two names it was written under.
+
+    agent-safety-core writes `event_hash`, this log writes `record_hash`. The
+    canonical form and the chaining are the same, so the two were described as
+    readable by a single verifier - and were not, because each rejected the
+    other's field name as a modified record. Accepting both keeps every log
+    already written valid.
+    """
+    return integrity.get("record_hash", integrity.get("event_hash"))
+
+
 def _record_hash(body: Mapping[str, Any], previous_hash: str) -> str:
     return hashlib.sha256(
         previous_hash.encode("ascii") + _canonical(body).encode("utf-8")
@@ -100,7 +112,7 @@ class AuditLog:
                 continue
             record = json.loads(line)
             self._sequence = record["sequence"]
-            self._tip = record["integrity"]["record_hash"]
+            self._tip = _integrity_hash(record["integrity"]) or GENESIS_HASH
 
     @property
     def tip_hash(self) -> str:
@@ -175,7 +187,7 @@ def verify_audit_log(path: Path | str) -> AuditReport:
             break
         if integrity.get("previous_hash") != previous:
             violations.append(Violation(number, "chain is broken here", kind="chain_broken"))
-        if integrity.get("record_hash") != _record_hash(record, integrity.get("previous_hash", "")):
+        if _integrity_hash(integrity) != _record_hash(record, integrity.get("previous_hash", "")):
             violations.append(Violation(number, "record content was modified", kind="content_modified"))
         sequence = record.get("sequence")
         if isinstance(sequence, int):
@@ -185,7 +197,7 @@ def verify_audit_log(path: Path | str) -> AuditReport:
                               kind="sequence_regressed")
                 )
             last_sequence = sequence
-        previous = integrity.get("record_hash", "")
+        previous = _integrity_hash(integrity) or ""
 
     return AuditReport(count, tuple(violations), previous)
 
