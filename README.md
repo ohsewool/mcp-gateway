@@ -1,5 +1,7 @@
 # MCP Security & Reliability Gateway
 
+[![tests](https://github.com/ohsewool/mcp-gateway/actions/workflows/tests.yml/badge.svg)](https://github.com/ohsewool/mcp-gateway/actions/workflows/tests.yml)
+
 에이전트와 MCP 서버 **사이에 실제로 끼어드는** 프록시. 도구 호출이 서버에 닿기 전에 정책으로 판단하고, 위험한 호출은 사람 승인을 요구하며, 모든 결정을 실행 원장에 남긴다.
 
 ```
