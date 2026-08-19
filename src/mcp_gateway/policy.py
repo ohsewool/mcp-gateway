@@ -15,6 +15,7 @@ file, starts a command, or connects to a network service.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Mapping, Sequence
 
 
@@ -46,6 +47,25 @@ class FilesystemConstraint:
             and self.path.startswith("/")
         )
 
+    def permits(self, requested: "Constraint") -> bool:
+        """Does granting this permit the requested access?
+
+        A grant on a directory covers what is under it. Written with path
+        components rather than string prefixes, because `/tmp/work` is a prefix
+        of `/tmp/work-evil` and a rule scoped to one directory would silently
+        cover a sibling. Traversal is handled by refusing `..` outright rather
+        than resolving it - resolution here would disagree with whatever the
+        server does later, and the two must not differ.
+        """
+        if not isinstance(requested, FilesystemConstraint):
+            return False
+        if self.operation != requested.operation:
+            return False
+        if ".." in PurePosixPath(requested.path).parts:
+            return False
+        granted = PurePosixPath(self.path).parts
+        return PurePosixPath(requested.path).parts[:len(granted)] == granted
+
 
 @dataclass(frozen=True)
 class NetworkConstraint:
@@ -64,6 +84,12 @@ class NetworkConstraint:
             and 1 <= self.port <= 65535
         )
 
+    def permits(self, requested: "Constraint") -> bool:
+        """Exact. A host and port are not a range, and treating them as a
+        hierarchy - `api.example.com` under `example.com` - would let anyone who
+        controls a subdomain inherit the grant."""
+        return self == requested
+
 
 @dataclass(frozen=True)
 class CommandConstraint:
@@ -74,6 +100,9 @@ class CommandConstraint:
     def valid(self) -> bool:
         return _valid_identifier(self.command)
 
+    def permits(self, requested: "Constraint") -> bool:
+        return self == requested
+
 
 @dataclass(frozen=True)
 class ResourceConstraint:
@@ -83,6 +112,9 @@ class ResourceConstraint:
 
     def valid(self) -> bool:
         return _valid_identifier(self.resource)
+
+    def permits(self, requested: "Constraint") -> bool:
+        return self == requested
 
 
 Constraint = (
@@ -117,10 +149,31 @@ class PolicyRule:
         )
 
     def matches(self, request: PolicyRequest) -> bool:
-        return (
-            self.server_id == request.server_id
-            and self.tool_id == request.tool_id
-            and self.constraints == request.constraints
+        """Does this rule govern the request?
+
+        Constraints used to be compared with `==`, which made a rule scoped to
+        `/tmp/work` govern only a request naming that exact path - so
+        `/tmp/work/report.txt` fell through to default_deny and "allow writes
+        under this directory" could not be written at all.
+
+        Now every constraint the request asks for must be permitted by one this
+        rule grants. A request that asks for nothing matches a rule that grants
+        nothing, which keeps plain tool-level allow/deny working as before.
+        """
+        if self.server_id != request.server_id or self.tool_id != request.tool_id:
+            return False
+        if not self.constraints:
+            return not request.constraints
+        if not request.constraints:
+            # `all()` over nothing is true, so an unconstrained request matched
+            # a scoped rule and was allowed without any scope being checked.
+            # That is the failure direction to avoid: when the gateway cannot
+            # derive a path from the arguments it produces no constraints, and
+            # the scoped rule would then approve a call it knows nothing about.
+            return False
+        return all(
+            any(granted.permits(asked) for granted in self.constraints)
+            for asked in request.constraints
         )
 
     @property
