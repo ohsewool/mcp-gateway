@@ -43,8 +43,22 @@ def _record_hash(body: Mapping[str, Any], previous_hash: str) -> str:
 
 @dataclass(frozen=True)
 class Violation:
+    """One thing wrong with the log, and which thing.
+
+    `reason` is for a person; `kind` is for whatever has to decide what to do.
+    A missing log, an unreadable line and a broken chain call for different
+    responses - the first may simply mean nothing has been written yet, the last
+    means someone edited the record - and telling them apart used to require
+    matching on the sentence.
+
+    The same field exists on agent-safety-core's Violation, and the two logs
+    share a format so that one verifier can read both. Sharing the vocabulary is
+    part of that.
+    """
+
     line: int
     reason: str
+    kind: str = "unclassified"
 
 
 @dataclass(frozen=True)
@@ -139,7 +153,7 @@ def verify_audit_log(path: Path | str) -> AuditReport:
     """Check a gateway audit log using only the file."""
     path = Path(path)
     if not path.exists():
-        return AuditReport(0, (Violation(0, "log does not exist"),), GENESIS_HASH)
+        return AuditReport(0, (Violation(0, "log does not exist", kind="missing_log"),), GENESIS_HASH)
 
     violations: list[Violation] = []
     previous = GENESIS_HASH
@@ -153,21 +167,22 @@ def verify_audit_log(path: Path | str) -> AuditReport:
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
-            violations.append(Violation(number, "record is not valid JSON"))
+            violations.append(Violation(number, "record is not valid JSON", kind="malformed_line"))
             break
         integrity = record.pop("integrity", None)
         if not isinstance(integrity, dict):
-            violations.append(Violation(number, "record has no integrity block"))
+            violations.append(Violation(number, "record has no integrity block", kind="missing_integrity"))
             break
         if integrity.get("previous_hash") != previous:
-            violations.append(Violation(number, "chain is broken here"))
+            violations.append(Violation(number, "chain is broken here", kind="chain_broken"))
         if integrity.get("record_hash") != _record_hash(record, integrity.get("previous_hash", "")):
-            violations.append(Violation(number, "record content was modified"))
+            violations.append(Violation(number, "record content was modified", kind="content_modified"))
         sequence = record.get("sequence")
         if isinstance(sequence, int):
             if sequence != last_sequence + 1:
                 violations.append(
-                    Violation(number, f"sequence jumped from {last_sequence} to {sequence}")
+                    Violation(number, f"sequence jumped from {last_sequence} to {sequence}",
+                              kind="sequence_regressed")
                 )
             last_sequence = sequence
         previous = integrity.get("record_hash", "")

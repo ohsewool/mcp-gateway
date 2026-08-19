@@ -138,7 +138,7 @@ class TestVerification:
         log.path.write_text("\n".join([lines[0], lines[2]]) + "\n", encoding="utf-8")
         report = verify_audit_log(log.path)
         assert not report.ok
-        assert any("chain is broken" in violation.reason for violation in report.violations)
+        assert any(violation.kind == "chain_broken" for violation in report.violations)
 
     def test_reordering_is_detected(self, log):
         for index in range(3):
@@ -424,3 +424,55 @@ class TestTheGatewayActuallyWritesToIt:
         for tool in ("read_file", "write_file"):
             self.call(interceptor, tool)
         assert len(interceptor.audit_failures) == 2
+
+
+class TestViolationsCarryTheirKind:
+    """Same vocabulary as agent-safety-core's Violation, on purpose.
+
+    The two logs share a format so one verifier can read both; sharing the
+    classification is part of that. A missing log, an unreadable line and a
+    broken chain need different responses - the first may just mean nothing has
+    been written yet, the last means someone edited the record.
+    """
+
+    def test_a_missing_log_is_named(self, tmp_path):
+        from mcp_gateway.audit import verify_audit_log
+        report = verify_audit_log(tmp_path / "never-written.jsonl")
+        assert [v.kind for v in report.violations] == ["missing_log"]
+
+    def test_an_unreadable_line_is_named(self, tmp_path):
+        from mcp_gateway.audit import verify_audit_log
+        path = tmp_path / "audit.jsonl"
+        path.write_text("{ not json\n", encoding="utf-8")
+        assert verify_audit_log(path).violations[0].kind == "malformed_line"
+
+    def test_a_record_without_integrity_is_named(self, tmp_path):
+        from mcp_gateway.audit import verify_audit_log
+        path = tmp_path / "audit.jsonl"
+        path.write_text('{"sequence": 1}\n', encoding="utf-8")
+        assert verify_audit_log(path).violations[0].kind == "missing_integrity"
+
+    def test_a_clean_log_has_nothing_to_classify(self, tmp_path):
+        from mcp_gateway.audit import AuditLog, verify_audit_log
+        log = AuditLog(tmp_path / "audit.jsonl", session_id="s1")
+        log.record({"kind": "decision", "action": "forwarded"}, server_id="fs")
+        assert verify_audit_log(tmp_path / "audit.jsonl").violations == ()
+
+    def test_nothing_falls_through_unclassified(self, tmp_path):
+        """A new failure mode must not arrive without someone naming it."""
+        import json
+
+        from mcp_gateway.audit import AuditLog, verify_audit_log
+
+        path = tmp_path / "audit.jsonl"
+        log = AuditLog(path, session_id="s1")
+        for action in ("forwarded", "blocked"):
+            log.record({"kind": "decision", "action": action}, server_id="fs")
+
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+        record = json.loads(lines[0])
+        record["action"] = "tampered"
+        path.write_text(json.dumps(record) + "\n" + lines[1] + "\n", encoding="utf-8")
+
+        for violation in verify_audit_log(path).violations:
+            assert violation.kind != "unclassified", violation.reason
