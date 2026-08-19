@@ -15,8 +15,9 @@ file, starts a command, or connects to a network service.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import PurePosixPath
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, get_args
 
 
 _IDENTIFIER_CHARS = frozenset(
@@ -92,6 +93,56 @@ class NetworkConstraint:
 
 
 @dataclass(frozen=True)
+class QuantityConstraint:
+    """A ceiling on a named numeric argument — "this much and no more".
+
+    The one shape of rule the policy could not express. `/tmp/work` scopes a
+    path; nothing scoped an amount, so a tool permitted to transfer money was
+    permitted to transfer any amount of it.
+
+    A grant permits a request for the same `name` at a value at or below its
+    own. The direction is fixed rather than configurable: every constraint here
+    answers "does holding this permit that", and a floor would invert the
+    meaning of `permits` for one type only. A minimum is expressed as a ceiling
+    on the thing being conserved.
+
+    `Decimal` because money in binary floating point is money that occasionally
+    rounds the wrong way, and a limit that is off by a cent is a limit that
+    someone will eventually be on the wrong side of.
+    """
+
+    name: str
+    maximum: Decimal
+    unit: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.maximum, Decimal):
+            # Accept int/str/float at the boundary and normalise, since callers
+            # write these by hand. float goes through str so 0.1 stays 0.1.
+            object.__setattr__(self, "maximum", Decimal(str(self.maximum)))
+
+    def valid(self) -> bool:
+        return (
+            _valid_identifier(self.name)
+            and isinstance(self.maximum, Decimal)
+            and self.maximum.is_finite()
+            and self.maximum >= 0
+            and isinstance(self.unit, str)
+        )
+
+    def permits(self, requested: "Constraint") -> bool:
+        if not isinstance(requested, QuantityConstraint):
+            return False
+        if self.name != requested.name or self.unit != requested.unit:
+            # Different units are different quantities. Treating 100 USD as
+            # covering 100 KRW would be a conversion this layer must not invent.
+            return False
+        if not requested.valid():
+            return False
+        return requested.maximum <= self.maximum
+
+
+@dataclass(frozen=True)
 class CommandConstraint:
     """A synthetic command name permission, with no execution capability."""
 
@@ -119,7 +170,11 @@ class ResourceConstraint:
 
 Constraint = (
     FilesystemConstraint | NetworkConstraint | CommandConstraint | ResourceConstraint
+    | QuantityConstraint
 )
+
+
+_CONSTRAINT_TYPES = tuple(get_args(Constraint))
 
 
 @dataclass(frozen=True)
@@ -197,12 +252,13 @@ def _valid_constraints(constraints: object) -> bool:
             return False
     except TypeError:
         return False
+    # Derived from the Constraint union rather than repeated by hand. The list
+    # was written out here, so adding QuantityConstraint made every request
+    # carrying one fail as malformed - silently, because malformed_request and
+    # "this type is not on a list I forgot to update" look identical from
+    # outside. A second place to remember is a second place to forget.
     return all(
-        isinstance(
-            constraint,
-            (FilesystemConstraint, NetworkConstraint, CommandConstraint, ResourceConstraint),
-        )
-        and constraint.valid()
+        isinstance(constraint, _CONSTRAINT_TYPES) and constraint.valid()
         for constraint in constraints
     )
 
