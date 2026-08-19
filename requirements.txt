@@ -1,0 +1,11 @@
+# The gateway itself needs nothing beyond the standard library: it speaks
+# JSON-RPC over pipes and HTTP, and delegates approval to agent-safety-core when
+# one is supplied.
+
+# Tests
+pytest>=8
+
+# Optional, for the cross-store integration tests:
+#   pip install -e ../agent-safety-core
+# Optional, for the live-server integration tests:
+#   node/npx, which fetches @modelcontextprotocol/server-filesystem
