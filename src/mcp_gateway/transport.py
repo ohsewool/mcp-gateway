@@ -159,9 +159,24 @@ class GatewayInterceptor:
         baseline_servers: Sequence[RegisteredServer] = (),
         constraints_for: Callable[[str, Mapping[str, Any]], tuple] | None = None,
         limiter: Any = None,
+        audit_log: Any = None,
     ) -> None:
+        """`audit_log` persists every decision; without one they stay in memory.
+
+        The README has claimed persistent auditing as a finished feature - "a
+        decision that only lives in memory is no use, the person asking days
+        later was not in the room" - while `_log` appended to a list and
+        `AuditLog` was imported by nothing but its own tests. The mechanism was
+        written, tested, and never connected to the thing that makes decisions.
+
+        Optional rather than required, because the interceptor is used without
+        one in unit tests and by callers who keep their own record. What is new
+        is that supplying one works.
+        """
         self._policy = policy
         self._server_id = server_id
+        self._audit_log = audit_log
+        self._audit_failures: list[str] = []
         self._baseline = baseline
         self._baseline_servers = tuple(baseline_servers)
         self._constraints_for = constraints_for or (lambda tool_id, arguments: ())
@@ -172,8 +187,31 @@ class GatewayInterceptor:
     def records(self) -> tuple[InterceptionRecord, ...]:
         return tuple(self._records)
 
+    @property
+    def audit_failures(self) -> tuple[str, ...]:
+        """Decisions that were made but could not be written down.
+
+        Surfaced rather than raised: a gateway that stops deciding because its
+        disk is full has turned a logging problem into an availability one. But
+        a silent gap in an audit log reads as "nothing happened", so the count
+        has to be reachable.
+        """
+        return tuple(self._audit_failures)
+
     def _log(self, record: InterceptionRecord) -> InterceptionRecord:
         self._records.append(record)
+        if self._audit_log is not None:
+            # Appending must not swallow the decision it is recording: a gateway
+            # that stops deciding because its disk is full has turned a logging
+            # problem into an availability one. The failure is surfaced on the
+            # record instead, so a reader can see the gap rather than infer it
+            # from an absence.
+            try:
+                # AuditLog.record was written to take exactly this object. The
+                # two were built to fit and never introduced.
+                self._audit_log.record(record, server_id=self._server_id)
+            except Exception as error:                      # noqa: BLE001
+                self._audit_failures.append(str(error))
         return record
 
     def inspect_request(self, message: Mapping[str, Any]) -> Interception:

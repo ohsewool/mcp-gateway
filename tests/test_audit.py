@@ -305,3 +305,122 @@ class TestExternalAnchoring:
         )
         assert not ok
         assert any("signature" in note for note in notes)
+
+
+class TestTheGatewayActuallyWritesToIt:
+    """The log existed, was tested, and nothing wrote to it.
+
+    The README has claimed persistent auditing as finished - "a decision that
+    only lives in memory is no use; the person asking days later was not in the
+    room" - while GatewayInterceptor._log appended to a list and AuditLog was
+    imported by nothing outside this file. Both halves were built. They were
+    never introduced.
+    """
+
+    def interceptor(self, log=None):
+        from mcp_gateway.policy import DeterministicPolicy, PolicyRule
+        from mcp_gateway.registry import RegisteredServer
+        from mcp_gateway.transport import GatewayInterceptor
+
+        policy = DeterministicPolicy(
+            {"fs": ["read_file", "write_file"]},
+            [PolicyRule("allow-read", "allow", "fs", "read_file")],
+        )
+        return GatewayInterceptor(
+            policy, "fs",
+            baseline_servers=[RegisteredServer(identifier="fs", metadata={})],
+            audit_log=log,
+        )
+
+    def call(self, interceptor, tool):
+        return interceptor.inspect_request({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": tool, "arguments": {}},
+        })
+
+    def test_a_decision_reaches_the_file(self, tmp_path):
+        from mcp_gateway.audit import AuditLog
+
+        path = tmp_path / "audit.jsonl"
+        interceptor = self.interceptor(AuditLog(path, session_id="s1"))
+        self.call(interceptor, "read_file")
+        assert path.exists() and path.read_text(encoding="utf-8").strip()
+
+    def test_both_allowed_and_denied_decisions_are_written(self, tmp_path):
+        """A log of only the refusals cannot answer "what did it let through"."""
+        import json
+
+        from mcp_gateway.audit import AuditLog
+
+        path = tmp_path / "audit.jsonl"
+        interceptor = self.interceptor(AuditLog(path, session_id="s1"))
+        self.call(interceptor, "read_file")
+        self.call(interceptor, "write_file")
+
+        actions = [json.loads(line)["action"]
+                   for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert "forwarded" in actions and "blocked" in actions
+
+    def test_the_reason_survives_to_disk(self, tmp_path):
+        """"Blocked" without why is a record nobody can act on."""
+        import json
+
+        from mcp_gateway.audit import AuditLog
+
+        path = tmp_path / "audit.jsonl"
+        interceptor = self.interceptor(AuditLog(path, session_id="s1"))
+        self.call(interceptor, "not_registered")
+
+        last = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+        assert last["reason_code"] == "unknown_tool"
+
+    def test_the_written_chain_verifies(self, tmp_path):
+        from mcp_gateway.audit import AuditLog, verify_audit_log
+
+        path = tmp_path / "audit.jsonl"
+        interceptor = self.interceptor(AuditLog(path, session_id="s1"))
+        for tool in ("read_file", "write_file", "not_registered"):
+            self.call(interceptor, tool)
+        assert verify_audit_log(path).ok
+
+    def test_the_memory_record_still_matches_the_file(self, tmp_path):
+        """Two records of one decision must not disagree about how many."""
+        from mcp_gateway.audit import AuditLog
+
+        path = tmp_path / "audit.jsonl"
+        interceptor = self.interceptor(AuditLog(path, session_id="s1"))
+        for tool in ("read_file", "write_file"):
+            self.call(interceptor, tool)
+
+        written = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(written) == len(interceptor.records)
+
+    def test_without_a_log_nothing_breaks(self, tmp_path):
+        """Optional: unit tests and callers keeping their own record use none."""
+        interceptor = self.interceptor(None)
+        self.call(interceptor, "read_file")
+        assert len(interceptor.records) == 1
+
+    def test_a_failing_log_does_not_stop_the_gateway_deciding(self, tmp_path):
+        """A full disk is a logging problem; refusing to decide would make it an
+        availability one. The gap is surfaced rather than raised."""
+        class Broken:
+            def record(self, *args, **kwargs):
+                raise OSError("no space left on device")
+
+        interceptor = self.interceptor(Broken())
+        interception = self.call(interceptor, "read_file")
+        assert interception is not None
+        assert interceptor.audit_failures
+
+    def test_a_silent_gap_is_not_left_silent(self, tmp_path):
+        """An absent record reads as "nothing happened", so the count is
+        reachable."""
+        class Broken:
+            def record(self, *args, **kwargs):
+                raise OSError("disk error")
+
+        interceptor = self.interceptor(Broken())
+        for tool in ("read_file", "write_file"):
+            self.call(interceptor, tool)
+        assert len(interceptor.audit_failures) == 2
