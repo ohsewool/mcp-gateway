@@ -66,4 +66,4 @@ jobs:
       - name: Run the suite
         env:
           PYTHONPATH: ${{ github.workspace }}/.sibling/agent-safety-core
-        run: python -m pytest -q
+        run: python -m pytest -q -rs   # -rs names every skip and why
