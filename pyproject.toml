@@ -1,0 +1,29 @@
+# Packaging exists so the commands this project's README prints actually work.
+#
+# The layout is src/, so a fresh clone cannot `import mcp_gateway` and cannot run
+# `python -m mcp_gateway.…` - the tests only worked because each one inserts src/
+# onto sys.path itself. Someone following the README hit a ModuleNotFoundError
+# on the first documented command.
+#
+#     pip install -e .
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-gateway"
+version = "0.1.0"
+description = "MCP 서버 앞에 끼어드는 보안·신뢰성 프록시"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = []
+
+[project.urls]
+Source = "https://github.com/ohsewool/mcp-gateway"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

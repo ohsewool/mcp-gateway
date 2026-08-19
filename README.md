@@ -14,6 +14,7 @@
 ```
 
 ```bash
+pip install -e .                                   # src/ 레이아웃이라 설치 없이는 import되지 않는다
 python3 -m pytest tests/ -q                      # 155 tests
 python3 -m mcp_gateway.audit verify <log.jsonl>  # 감사 로그 검증
 python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
