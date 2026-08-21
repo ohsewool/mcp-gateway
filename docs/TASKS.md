@@ -1,5 +1,16 @@
 # Tasks
 
+<!-- historical: 프로젝트 착수 시점 -->
+> **이 문서는 기록이다.** 착수 시점의 단계별 작업 목록이다. A1은 "코드·데이터셋·자격증명이 없음을 확인하라"이고, 여러 항목이 "동작을 구현하지 말 것"을 명시한다.
+>
+> 그 뒤로 달라진 것: 정책·무결성·감사·전송 계층을 구현하고 실제 MCP 서버 2종을 상대로 돌렸으며 테스트 239개가 돈다. 범위 해제는 [`PROJECT_SPEC.md`](PROJECT_SPEC.md)가 이미 기록해 두었다.
+>
+> 지금 상태는 [README](../README.md)에 있다. 여기 적힌 "아직 하지 않았다"·"구현하지 말라"는
+> 항목들은 **당시의 사실이자 당시의 제약**이다. 체크박스를 지금 채우면 계획을 그대로
+> 따른 것처럼 보이고, 실제로 어디서 갈라졌는지가 사라진다. 그래서 고치지 않고 선언한다.
+>
+> 낡았다는 것이 선언이면 기록이고, 선언이 아니면 사고다.
+
 Only tasks in `AUTO_READY` may proceed without further scope approval. Completing a planning or skeleton task does not authorize full application implementation.
 
 ## AUTO_READY
