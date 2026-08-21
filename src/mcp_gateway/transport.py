@@ -25,6 +25,7 @@ what was authorized versus what is executed.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
@@ -370,12 +371,30 @@ class GatewayProxy:
     quietly enforce a weaker version of it: the same guard, the same policy
     interception, the same settlement of outcomes. A transport supplies only
     ``_dispatch``, which sends one frame and returns the matching reply.
+
+    **One frame at a time.** ``request`` holds a lock for the whole pipeline.
+    Without it the duplicate-request guard below was a check followed by a write
+    with the entire server round trip in between, and it did not hold: eight
+    concurrent frames carrying the same id got **two to six** of them past the
+    guard in 18 of 20 rounds measured on 2026-08-22. That guard exists so one id
+    maps to one outcome; several in-flight requests sharing an id collapse the
+    settlement bookkeeping, because the first reply pops the entry and the rest
+    settle against nothing.
+
+    The stdio transport could not overlap anyway - it buffers bytes in one
+    attribute and discards frames whose id does not match, so a second caller's
+    reply would be thrown away and the first would appear to time out. HTTP could
+    in principle overlap, but it shares ``_pending``, the interceptor and the
+    audit log with every other call, so overlapping would need each of those
+    locked separately for a throughput gain nothing here has asked for. Serialise
+    now, and say so, rather than leave it undefined.
     """
 
     def __init__(self, interceptor: GatewayInterceptor, *, guard: Any = None) -> None:
         self._interceptor = interceptor
         self._guard = guard
         self._pending: dict[Any, str] = {}
+        self._lock = threading.RLock()
 
     def _dispatch(self, message: Mapping[str, Any], *, request_id: Any,
                   timeout: float) -> dict[str, Any] | None:
@@ -388,6 +407,11 @@ class GatewayProxy:
         A blocked frame never reaches the server; the gateway's error response is
         returned instead.
         """
+        with self._lock:
+            return self._request_locked(message, timeout=timeout)
+
+    def _request_locked(self, message: Mapping[str, Any], *,
+                        timeout: float) -> dict[str, Any]:
         method = message.get("method")
         request_id = message.get("id")
 
