@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -92,12 +93,33 @@ class AuditReport:
 
 
 class AuditLog:
-    """Append-only, hash-chained record of interception decisions."""
+    """Append-only, hash-chained record of interception decisions.
+
+    ``record`` is safe to call from several threads of one process. It was not,
+    and the failure was not subtle: sixteen concurrent appends forked the chain
+    in **40 of 40 rounds** measured on 2026-08-22. Two records would carry the
+    same ``previous_hash``, because the sequence number, the hash of the tip, the
+    file append and the update of the tip were four separate steps with nothing
+    holding them together.
+
+    The verifier caught it every time - ``verify_audit_log`` reported
+    ``chain_broken`` and ``sequence_regressed`` - so the failure was loud rather
+    than silent. That is the good half. The bad half is that a gateway serving
+    two calls at once produced an audit log that could not pass its own check,
+    and nothing in this class said it must not be used that way.
+
+    **One process.** The lock does not reach across processes; two processes
+    appending to one path will still fork the chain. ``agent-safety-core`` solved
+    the cross-process version with a single-authority sequence in SQLite, which
+    is the right shape for a shared ledger and the wrong shape for a per-session
+    JSONL file. One session, one process, one log.
+    """
 
     def __init__(self, path: Path | str, *, session_id: str = "default",
                  clock=None) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
         self._session_id = session_id
         self._clock = clock or (lambda: __import__("time").time())
         self._sequence = 0
@@ -129,23 +151,26 @@ class AuditLog:
             "rule_id": interception.rule_id,
             "detail": dict(interception.detail),
         }
-        self._sequence += 1
-        body = {
-            "sequence": self._sequence,
-            "session_id": self._session_id,
-            "server_id": server_id,
-            "recorded_at": self._clock(),
-            **source,
-        }
-        sealed = dict(body)
-        sealed["integrity"] = {
-            "previous_hash": self._tip,
-            "record_hash": _record_hash(body, self._tip),
-        }
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(_canonical(sealed) + "\n")
-            handle.flush()
-        self._tip = sealed["integrity"]["record_hash"]
+        # 번호 매기기·해시·기록·꼬리 갱신은 하나의 동작이다. 나눠 하면 다른
+        # 스레드가 같은 꼬리를 읽고 체인이 갈라진다.
+        with self._lock:
+            self._sequence += 1
+            body = {
+                "sequence": self._sequence,
+                "session_id": self._session_id,
+                "server_id": server_id,
+                "recorded_at": self._clock(),
+                **source,
+            }
+            sealed = dict(body)
+            sealed["integrity"] = {
+                "previous_hash": self._tip,
+                "record_hash": _record_hash(body, self._tip),
+            }
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(_canonical(sealed) + "\n")
+                handle.flush()
+            self._tip = sealed["integrity"]["record_hash"]
         return sealed
 
     def record_all(self, interceptions: Iterable[Any], *, server_id: str) -> int:

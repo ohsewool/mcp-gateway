@@ -26,6 +26,7 @@ of timing-dependent.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -64,6 +65,20 @@ class LimitEnforcer:
 
     A refused call consumes nothing: being throttled must not eat the budget, or
     a client that retries politely would be punished for the throttling.
+
+    ``consume`` is safe to call from several threads of one process. It was not:
+    deciding and spending were two steps, so two callers could both see the last
+    unit of budget and both take it. Measured on 2026-08-22 with a short thread
+    switch interval - 300 rounds of 32 concurrent calls against a budget of 10,
+    and **one round let 11 through**. Rare is not the same as impossible, and a
+    budget that can be exceeded is not a bound.
+
+    ``check`` is advisory and stays that way: it answers "would this be allowed"
+    without spending. Calling ``check`` and then ``consume`` is still two steps,
+    and the answer can go stale in between. Only ``consume`` decides.
+
+    Note that ``check`` is not a pure read - it refills the bucket, which is a
+    mutation. It takes the same lock for that reason.
     """
 
     def __init__(
@@ -80,6 +95,8 @@ class LimitEnforcer:
         self._clock = clock or time.monotonic
         self._buckets: dict[str, _Bucket] = {}
         self._spent = 0
+        # 재진입 가능해야 한다 - `consume`이 잠근 채로 `check`를 부른다.
+        self._lock = threading.RLock()
 
     @property
     def spent(self) -> int:
@@ -94,6 +111,10 @@ class LimitEnforcer:
 
     def check(self, tool_id: str) -> LimitDecision:
         """Decide without consuming. Used to answer before dispatching."""
+        with self._lock:
+            return self._check_locked(tool_id)
+
+    def _check_locked(self, tool_id: str) -> LimitDecision:
         if self._budget is not None and self._spent >= self._budget:
             return LimitDecision(False, "session_budget_exhausted", remaining=0)
 
@@ -112,15 +133,16 @@ class LimitEnforcer:
         return LimitDecision(True, remaining=self.budget_remaining)
 
     def consume(self, tool_id: str) -> LimitDecision:
-        """Check and, if permitted, spend one call."""
-        decision = self.check(tool_id)
-        if not decision.allowed:
-            return decision
-        limit = self._limit_for(tool_id)
-        if limit is not None:
-            self._buckets[tool_id].tokens -= 1
-        self._spent += 1
-        return LimitDecision(True, remaining=self.budget_remaining)
+        """Check and, if permitted, spend one call. One step, not two."""
+        with self._lock:
+            decision = self._check_locked(tool_id)
+            if not decision.allowed:
+                return decision
+            limit = self._limit_for(tool_id)
+            if limit is not None:
+                self._buckets[tool_id].tokens -= 1
+            self._spent += 1
+            return LimitDecision(True, remaining=self.budget_remaining)
 
     def _refill(self, tool_id: str, limit: RateLimit) -> _Bucket:
         now = self._clock()

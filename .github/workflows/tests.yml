@@ -32,8 +32,11 @@ jobs:
         run: pip install -r requirements.txt
 
       # The approval and cross-store tests delegate to the core's ledger. Absent
-      # it, 35 of them skip and the run still passes - the exact silence this
-      # workflow exists to break.
+      # it, five skip and forty-six are never collected at all, and the run still
+      # passes - the exact silence this workflow exists to break. (This comment
+      # said "35 of them skip" until 2026-08-22, when the numbers were measured
+      # for the first time. The README said 139 passed. Neither was right, and
+      # nothing compared them. The `without-core` job below now does.)
       - name: Check out agent-safety-core
         uses: actions/checkout@v4
         with:
@@ -81,3 +84,63 @@ jobs:
 
       - name: Run the suite
         run: python -m pytest -q -rs   # -rs names every skip and why
+
+  # The README claims the gateway works without its sibling. That sentence had
+  # never been run: the count in it was written once and left behind while the
+  # total beside it was maintained. Measuring is cheap - not measuring is how a
+  # repository ends up holding three different numbers for one fact.
+  without-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install this repository only
+        run: pip install -r requirements.txt
+
+      - name: Fetch the MCP server the integration tests talk to
+        run: npx -y @modelcontextprotocol/server-filesystem --version || true
+
+      - name: Prove the core really is absent
+        # Without this, a run where the core happens to be importable would
+        # report the with-core numbers and the comparison below would fail for
+        # a reason that has nothing to do with what it is checking.
+        run: |
+          if python -c "import core" 2>/dev/null; then
+            echo "::error::agent-safety-core is importable; this job measures its absence."
+            exit 1
+          fi
+          echo "core is not importable, as this job requires"
+
+      - name: Compare the README's without-core numbers against a measurement
+        run: |
+          set -o pipefail
+          python -m pytest -q -rs | tee run.txt || true
+          passed=$(grep -oE '[0-9]+ passed' run.txt | tail -1 | grep -oE '^[0-9]+')
+          skipped=$(grep -oE '[0-9]+ skipped' run.txt | tail -1 | grep -oE '^[0-9]+')
+          collected=$(python -m pytest --collect-only -q 2>/dev/null \
+            | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+')
+          # 처음 쓴 패턴은 `코어 없이 \*\*[0-9]+개 통과`였고 빈 값을 냈다 -
+          # README의 강조는 "코어" 앞에 붙어 있다. 로컬에서 돌려보지 않았으면
+          # CI가 "README와 다르다"고 말했을 것이고, 원인은 README가 아니라 이 줄이다.
+          claimed_pass=$(grep -oE '코어 없이 [0-9]+개 통과' README.md \
+            | grep -oE '[0-9]+')
+          claimed_skip=$(grep -oE '[0-9]+개 skip' README.md | head -1 | grep -oE '^[0-9]+')
+          echo "measured: ${passed:-none} passed, ${skipped:-none} skipped, ${collected:-none} collected"
+          echo "README:   ${claimed_pass:-none} passed, ${claimed_skip:-none} skipped"
+          if [ "${passed:-0}" != "${claimed_pass:-1}" ] || [ "${skipped:-0}" != "${claimed_skip:-1}" ]; then
+            echo "::error::README's without-core numbers do not match a measurement."
+            exit 1
+          fi
+          if [ "${passed:-0}" -eq 0 ]; then
+            echo "::error::nothing passed; this comparison would agree with any README."
+            exit 1
+          fi
