@@ -1,5 +1,17 @@
 # Status
 
+<!-- historical: 프로젝트 착수 시점 -->
+> **이 문서는 기록이다.** 착수 시점의 단계 게이트 상태다 — 무엇을 아직 하지
+> 않았고 다음에 무엇이 승인됐는지를 적어둔 것이다.
+>
+> 그 뒤로 달라진 것: 정책·무결성·감사·전송 계층을 구현하고 실제 MCP 서버 2종을 상대로 돌렸다. 코어 원장을 authority로 결합했다.
+>
+> 지금 상태는 [README](../README.md)에 있다. 여기 적힌 "아직 하지 않았다"는 문장들은
+> **당시의 사실**이고 지금은 맞지 않는다. 조용히 고치면 착수 때 무엇을 의도적으로
+> 미뤘는지가 사라지므로, 고치는 대신 선언한다.
+>
+> 낡았다는 것이 선언이면 기록이고, 선언이 아니면 사고다.
+
 ## Current phase
 
 **Approved specification and planning documentation.** The repository scaffold exists and the approved MCP gateway research scope has been documented. Full application implementation and experiment execution have not started.

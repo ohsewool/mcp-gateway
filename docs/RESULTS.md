@@ -73,4 +73,8 @@ Report numerator, denominator, rate, sample count, and uncertainty where applica
 
 ## Current findings
 
-None. The project remains in the specification and planning phase.
+**이 문장은 더 이상 사실이 아니었다.** 원래 "None. The project remains in the specification and planning phase."였고, 착수 시점에는 맞았으며 그 뒤로 고쳐지지 않았다.
+
+이 파일에는 없다. 실제 측정은 [README](../README.md)에 있다 — 정책·무결성·감사·전송 계층과 실제 MCP 서버 2종을 상대로 한 결과, 그리고 코어 원장 결합.
+
+아래 템플릿은 그대로 둔다 — 보고 구조를 정의하는 것이 이 파일의 나머지 역할이다.
