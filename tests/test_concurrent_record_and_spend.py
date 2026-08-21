@@ -256,3 +256,108 @@ class TestADegenerateLimitIsRefused:
         tokens = 5.0
         tokens = min(5.0, tokens + 1.0 * float("nan"))
         assert not tokens < 1, "NaN 토큰이 1보다 작다고 판정되면 이 결함은 성립하지 않는다"
+
+
+class TestOneSessionIsOneBudget:
+    """철자를 바꾸면 예산이 새로 생겼다.
+
+    세션은 예산을 세는 단위인데 레지스트리는 넘겨받은 문자열을 그대로 키로 썼다.
+    2026-08-22 실측: 예산 3에 `s-1`·`S-1`·`" s-1"`·`"s-1 "`·`"s-1\\n"`·`"s\\u20111"`
+    여섯 철자가 각자 세션을 열어 **총 18회**를 통과시켰다. 세션 예산은 레이트 리밋
+    아래로 기어가는 루프를 멈추는 마지막 한도인데, 이름을 다시 쓰면 초기화된다.
+
+    **여기서 대소문자를 접는 것은 정책과 반대 판단이다.** 도구·서버 이름은 정책에서
+    대소문자를 구분하고, 어긋나면 전부 **닫히는 쪽으로** 실패한다 — 같은 날 쟀다:
+    요청의 대소문자가 등록과 다르면 `unknown_tool`, 규칙이 다르면 `default_deny`,
+    공백이 섞이면 `malformed_request`. 이미 닫히는 이름을 접으면 규칙이 매치하는
+    범위만 넓어진다. 세션 식별자는 정반대다 — 접지 않으면 새 예산을 내준다.
+    """
+
+    def session_registry(self, budget=3):
+        from mcp_gateway.limits import SessionRegistry
+
+        return SessionRegistry(lambda: LimitEnforcer(session_budget=budget,
+                                                     clock=lambda: 0.0))
+
+    @pytest.mark.parametrize("spelling", ["S-1", " s-1", "s-1 ", "s-1\n", "\ts-1"])
+    def test_a_respelt_id_is_the_same_session(self, spelling):
+        registry = self.session_registry()
+        registry.open("s-1", server_id="srv")
+        with pytest.raises(ValueError, match="already open"):
+            registry.open(spelling, server_id="srv")
+
+    def test_a_look_alike_id_is_refused_outright(self):
+        """NFKC는 `\\u2011`을 ASCII 하이픈으로 접지 않는다."""
+        registry = self.session_registry()
+        with pytest.raises(ValueError, match="may only contain"):
+            registry.open("s‑1", server_id="srv")
+
+    def test_the_budget_is_not_reset_by_respelling(self):
+        registry = self.session_registry(budget=3)
+        scope = registry.open("s-1", server_id="srv")
+        assert sum(scope.enforcer.consume("tool").allowed for _ in range(10)) == 3
+        for spelling in ("S-1", " s-1", "s-1\n"):
+            with pytest.raises(ValueError):
+                registry.open(spelling, server_id="srv")
+        assert len(registry) == 1
+
+    def test_lookup_finds_it_however_it_is_spelt(self):
+        registry = self.session_registry()
+        registry.open("s-1", server_id="srv")
+        for spelling in ("S-1", " s-1 ", "s-1\n"):
+            assert registry.get(spelling) is not None
+
+    def test_lookup_of_an_unusable_id_returns_none_rather_than_raising(self):
+        """`get`은 없으면 `None`을 주기로 한 함수다. 조회 한 번이 호출자를
+        죽이면 안 된다."""
+        registry = self.session_registry()
+        assert registry.get("s‑1") is None
+        assert registry.get("") is None
+
+    def test_closing_works_by_any_spelling(self):
+        registry = self.session_registry()
+        registry.open("s-1", server_id="srv")
+        registry.close("S-1")
+        assert len(registry) == 0
+
+    def test_a_genuinely_different_session_still_opens(self):
+        """대조. 전부 거절하는 레지스트리로도 위 검사들은 통과한다."""
+        registry = self.session_registry()
+        registry.open("s-1", server_id="srv")
+        assert registry.open("s-2", server_id="srv") is not None
+        assert len(registry) == 2
+
+    def test_the_stored_id_is_the_normalised_one(self):
+        registry = self.session_registry()
+        assert registry.open("  S-1  ", server_id="SRV").session_id == "s-1"
+
+    def test_the_server_id_is_normalised_too(self):
+        registry = self.session_registry()
+        assert registry.open("s-1", server_id="  SRV  ").server_id == "srv"
+
+
+class TestThePolicyStaysCaseSensitiveOnPurpose:
+    """접지 않는 쪽의 판단도 근거와 함께 고정한다. 어긋남이 전부 닫히는 방향이면
+    접는 것은 규칙이 매치하는 범위만 넓힌다."""
+
+    def decide(self, registered, rule_tool, requested):
+        from mcp_gateway.policy import DeterministicPolicy, PolicyRequest, PolicyRule
+
+        policy = DeterministicPolicy({"srv": [registered]},
+                                     [PolicyRule("allow-it", "allow", "srv", rule_tool)])
+        return policy.evaluate(PolicyRequest(server_id="srv", tool_id=requested,
+                                             constraints=()))
+
+    def test_an_exact_match_is_allowed(self):
+        assert self.decide("read_file", "read_file", "read_file").allowed
+
+    @pytest.mark.parametrize("registered,rule_tool,requested,reason", [
+        ("read_file", "read_file", "READ_FILE", "unknown_tool"),
+        ("READ_FILE", "read_file", "READ_FILE", "default_deny"),
+        ("read_file", "READ_FILE", "read_file", "default_deny"),
+        ("read_file", "read_file", " read_file", "malformed_request"),
+    ])
+    def test_every_case_mismatch_fails_closed(self, registered, rule_tool, requested, reason):
+        decision = self.decide(registered, rule_tool, requested)
+        assert not decision.allowed
+        assert decision.reason_code == reason

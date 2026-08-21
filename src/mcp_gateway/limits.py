@@ -29,6 +29,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -43,6 +44,44 @@ def _finite_number(value: object) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     return math.isfinite(value)
+
+
+SESSION_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-:@+")
+
+
+def normalize_session_id(value: object, *, field: str = "session_id") -> str:
+    """The one spelling of a session or server identifier.
+
+    Sessions are the unit the budget is counted against, and the registry keyed
+    them on whatever string it was handed. Six spellings of one id opened six
+    sessions: measured 2026-08-22 with a budget of 3, ``s-1``, ``S-1``,
+    ``" s-1"``, ``"s-1 "``, ``"s-1\n"`` and ``"s\u20111"`` together passed **18
+    calls**. The session budget is the limit that stops a loop slow enough to
+    slip under the rate limit forever; re-spelling the id resets it.
+
+    Case folding is deliberate **here and not in the policy**. Tool and server
+    names are compared case-sensitively there, and every mismatch fails closed -
+    measured the same day: a request whose case differs from the registry gets
+    ``unknown_tool``, a rule whose case differs from the registry gets
+    ``default_deny``, and whitespace gets ``malformed_request``. Folding a name
+    that already fails closed would only widen what a rule matches. A session id
+    is the opposite: not folding it hands out a fresh budget.
+
+    NFKC does not fold ``\u2011`` to ASCII ``-``, so the character set is
+    restricted too - the same reasoning as ``policy._valid_identifier``, whose
+    accepted characters are a superset of these.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    folded = unicodedata.normalize("NFKC", value).strip().casefold()
+    if not folded:
+        raise ValueError(f"{field} must not be empty")
+    bad = sorted({character for character in folded if character not in SESSION_ID_CHARS})
+    if bad:
+        raise ValueError(
+            f"{field} may only contain {''.join(sorted(SESSION_ID_CHARS))}; refused {bad!r}"
+        )
+    return folded
 
 
 @dataclass(frozen=True)
@@ -220,6 +259,8 @@ class SessionRegistry:
         self._sessions: dict[str, SessionScope] = {}
 
     def open(self, session_id: str, *, server_id: str) -> SessionScope:
+        session_id = normalize_session_id(session_id)
+        server_id = normalize_session_id(server_id, field="server_id")
         if session_id in self._sessions:
             raise ValueError(f"session already open: {session_id}")
         scope = SessionScope(session_id, server_id, self._factory())
@@ -227,10 +268,18 @@ class SessionRegistry:
         return scope
 
     def get(self, session_id: str) -> SessionScope | None:
-        return self._sessions.get(session_id)
+        try:
+            return self._sessions.get(normalize_session_id(session_id))
+        except ValueError:
+            # 열 수 없는 이름은 찾을 수도 없다. 여기서 예외를 내면 조회 한 번이
+            # 호출자를 죽이는데, `get`은 없으면 `None`을 주기로 한 함수다.
+            return None
 
     def close(self, session_id: str) -> None:
-        self._sessions.pop(session_id, None)
+        try:
+            self._sessions.pop(normalize_session_id(session_id), None)
+        except ValueError:
+            return
 
     def __len__(self) -> int:
         return len(self._sessions)
