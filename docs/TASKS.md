@@ -51,6 +51,16 @@ Only tasks in `AUTO_READY` may proceed without further scope approval. Completin
 - [ ] Add any new runtime or development dependency, including MCP SDK, schema, testing, policy, logging, or retry libraries.
 - [ ] Add any capability or scope beyond `docs/PROJECT_SPEC.md`.
 - [ ] Add any threat or failure scenario beyond the approved set.
+- [ ] **Treat policy reconnaissance as an in-scope threat.** Measured 2026-08-22: a
+  blocked `tools/call` reply carries the reason code *and* the `rule_id`, so a client
+  that probes tool names can map the policy — which tools exist (`unknown_tool`), which
+  are explicitly denied (`explicit_deny` plus the rule name, e.g. `deny-delete-secret`),
+  and which have no rule (`default_deny`). Rule names carry intent. The gateway exists
+  to constrain the agent, so handing the constrained party a map is worth deciding on
+  deliberately. **Not changed.** Reconnaissance is not in the approved threat set of
+  `docs/PROJECT_SPEC.md` §3, and the reasons are what makes a denial actionable for a
+  legitimate client and debuggable for an operator. `tests/test_denial_disclosure.py`
+  pins the current shape so that changing it is a decision rather than a drift.
 - [ ] Integrate a real service, account, device, production system, cloud resource, external target, or non-synthetic credential.
 - [ ] Use any paid API or service.
 - [ ] Add any heuristic or LLM risk signal, even as a non-authoritative secondary signal.
