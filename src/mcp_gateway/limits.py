@@ -26,20 +26,52 @@ of timing-dependent.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
 
 
+def _finite_number(value: object) -> bool:
+    """A real, finite number - and not a ``bool``.
+
+    ``bool`` is a subclass of ``int``, so ``True`` slips through every numeric
+    check and becomes ``1``. ``NetworkConstraint`` in ``policy.py`` already
+    excludes it for the same reason.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value)
+
+
 @dataclass(frozen=True)
 class RateLimit:
-    """A token bucket: ``capacity`` tokens, refilled at ``per_second``."""
+    """A token bucket: ``capacity`` tokens, refilled at ``per_second``.
+
+    Both must be finite. They were checked with ``< 1`` and ``<= 0``, and **NaN
+    fails every comparison**, so it passed both guards and then poisoned the
+    bucket: ``tokens + elapsed * nan`` is ``nan``, ``nan < 1`` is false, and the
+    limiter allowed everything. Measured 2026-08-22 - a bucket declared with
+    capacity 5 and ``per_second=nan`` passed **100 of 100** calls.
+
+    ``inf`` gets there another way: an infinite capacity is a limiter that never
+    refuses. If that is what someone wants, ``limits={}`` already says it, and it
+    says it where a reader can see it.
+
+    This is the same shape as ``agent-safety-core``'s lease TTL, found the same
+    day: a degenerate float slipping past a comparison guard and landing on the
+    most permissive behaviour available.
+    """
 
     capacity: int
     per_second: float
 
     def __post_init__(self) -> None:
+        if not _finite_number(self.capacity):
+            raise ValueError("rate limit capacity must be a finite number")
+        if not _finite_number(self.per_second):
+            raise ValueError("rate limit refill must be a finite number")
         if self.capacity < 1:
             raise ValueError("rate limit capacity must be at least one call")
         if self.per_second <= 0:
@@ -91,6 +123,13 @@ class LimitEnforcer:
     ) -> None:
         self._limits = dict(limits or {})
         self._default = default_limit
+        # 같은 이유로 예산도 검사한다. `nan`이면 `self._spent >= self._budget`이
+        # 영원히 거짓이라 예산이 바닥나지 않는다 - 100회 중 100회 통과를 확인했다.
+        if session_budget is not None:
+            if not _finite_number(session_budget):
+                raise ValueError("session budget must be a finite number")
+            if session_budget < 0:
+                raise ValueError("session budget cannot be negative")
         self._budget = session_budget
         self._clock = clock or time.monotonic
         self._buckets: dict[str, _Bucket] = {}

@@ -205,3 +205,54 @@ def test_the_result_repeats(tmp_path, rounds):
         log = AuditLog(path, session_id="s", clock=lambda: 0.0)
         run_together(lambda index: log.record(interception(index), server_id="srv"))
         assert verify_audit_log(path).ok
+
+
+class TestADegenerateLimitIsRefused:
+    """비교 검사를 빠져나가는 값들.
+
+    `capacity < 1`과 `per_second <= 0`으로 검사하고 있었는데 **`NaN`은 모든 비교에서
+    거짓**이라 둘 다 통과했다. 그리고 통과한 뒤에는 버킷을 오염시킨다:
+    `tokens + elapsed * nan`은 `nan`이고 `nan < 1`도 거짓이라 **전부 허용**된다.
+    2026-08-22 실측 — capacity 5로 선언한 버킷이 100회 중 100회를 통과시켰다.
+    `session_budget=nan`도 같다: `spent >= budget`이 영원히 거짓이다.
+
+    `inf`는 다른 길로 같은 곳에 도착한다. 무한 capacity는 거절하지 않는 리미터이고,
+    그것을 원한다면 `limits={}`가 이미 그 말을 한다 — 읽는 사람이 볼 수 있는 자리에서.
+
+    같은 날 `agent-safety-core`에서 찾은 lease TTL과 같은 형태다. 퇴화한 float이
+    비교 가드를 빠져나가 **가장 허용적인 동작**에 내려앉는다.
+    """
+
+    @pytest.mark.parametrize("capacity", [float("nan"), float("inf"), True, "5", None])
+    def test_a_degenerate_capacity_is_refused(self, capacity):
+        with pytest.raises(ValueError, match="capacity"):
+            RateLimit(capacity=capacity, per_second=1.0)
+
+    @pytest.mark.parametrize("rate", [float("nan"), float("inf"), True, "1.0", None])
+    def test_a_degenerate_refill_is_refused(self, rate):
+        with pytest.raises(ValueError, match="refill"):
+            RateLimit(capacity=5, per_second=rate)
+
+    @pytest.mark.parametrize("budget", [float("nan"), float("inf"), True, "10", -1])
+    def test_a_degenerate_budget_is_refused(self, budget):
+        with pytest.raises(ValueError):
+            LimitEnforcer(session_budget=budget, clock=lambda: 0.0)
+
+    def test_a_zero_budget_is_allowed_and_refuses_everything(self):
+        """0은 퇴화가 아니라 "아무것도 하지 마라"다. `None`(무제한)과 구분된다."""
+        enforcer = LimitEnforcer(session_budget=0, clock=lambda: 0.0)
+        assert not enforcer.consume("tool").allowed
+        assert LimitEnforcer(session_budget=None, clock=lambda: 0.0).consume("tool").allowed
+
+    def test_the_normal_construction_still_works(self):
+        """전부 거절하는 검증은 전부 거절하는 것으로도 통과한다."""
+        enforcer = LimitEnforcer(default_limit=RateLimit(capacity=5, per_second=1.0),
+                                 session_budget=10, clock=lambda: 0.0)
+        assert enforcer.consume("tool").allowed
+
+    def test_the_poisoned_bucket_would_have_allowed_everything(self):
+        """이 결함이 왜 결함이었는지를 남긴다. 검증을 통과했다면 어떤 일이
+        벌어졌는지 - 산술만으로 재현한다."""
+        tokens = 5.0
+        tokens = min(5.0, tokens + 1.0 * float("nan"))
+        assert not tokens < 1, "NaN 토큰이 1보다 작다고 판정되면 이 결함은 성립하지 않는다"
