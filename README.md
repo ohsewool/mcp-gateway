@@ -15,7 +15,7 @@
 
 ```bash
 pip install -e .                                   # src/ 레이아웃이라 설치 없이는 import되지 않는다
-python3 -m pytest tests/ -q                      # 239 tests
+python3 -m pytest tests/ -q                      # 245 tests
 python3 -m mcp_gateway.audit verify <log.jsonl>  # 감사 로그 검증
 python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 ```
@@ -56,7 +56,7 @@ python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 
 ## 코어와의 관계
 
-승인·lease·결과 기록은 이 저장소가 직접 구현하지 않고 [`agent-safety-core`](https://github.com/ohsewool/agent-safety-core)의 실행 원장에 위임한다. 게이트웨이는 `ExecutionAuthority` 포트만 알며, 원자적 lease 소비가 외부 호출보다 **먼저** durable commit된다는 보장이 "동일 lease는 최대 1회 dispatch"를 성립시킨다. 코어가 없으면 정책·무결성 계층만으로도 동작한다 — **이 문장도 돌려본 적이 없었다.** 확인해보니 다섯 개의 코어 의존 테스트 중 하나가 가드 없이 코어를 당겼고, 셋은 `/home/jovyan/work/agent-safety-core`라는 **한 기계의 절대 경로**로 가용성을 판단했다. 다른 기계에서는 그 경로가 없어 조용히 skip되고, 그 기계에서 패키지를 지우면 경로는 있는데 import가 실패해 에러가 난다. 지금은 코어 없이 139개 통과·5개 skip, 있으면 239개 전부 통과한다.
+승인·lease·결과 기록은 이 저장소가 직접 구현하지 않고 [`agent-safety-core`](https://github.com/ohsewool/agent-safety-core)의 실행 원장에 위임한다. 게이트웨이는 `ExecutionAuthority` 포트만 알며, 원자적 lease 소비가 외부 호출보다 **먼저** durable commit된다는 보장이 "동일 lease는 최대 1회 dispatch"를 성립시킨다. 코어가 없으면 정책·무결성 계층만으로도 동작한다 — **이 문장도 돌려본 적이 없었다.** 확인해보니 다섯 개의 코어 의존 테스트 중 하나가 가드 없이 코어를 당겼고, 셋은 `/home/jovyan/work/agent-safety-core`라는 **한 기계의 절대 경로**로 가용성을 판단했다. 다른 기계에서는 그 경로가 없어 조용히 skip되고, 그 기계에서 패키지를 지우면 경로는 있는데 import가 실패해 에러가 난다. 지금은 코어 없이 139개 통과·5개 skip, 있으면 245개 전부 통과한다.
 
 ## 자식 서버의 환경
 
