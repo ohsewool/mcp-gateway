@@ -30,13 +30,29 @@ def test_no_test_decides_to_skip_by_looking_for_a_filesystem_path():
     A path check answers a question about one machine's layout, and gets the
     answer wrong in both directions.
     """
-    # Precise on purpose. A first version flagged any file mentioning the
-    # sibling alongside any absolute path, which caught Path(__file__) and this
-    # file's own docstring - a check that fires on everything is as useless as
-    # one that fires on nothing.
-    pattern = re.compile(r'Path\(\s*"/[^"]*agent-safety-core')
-    offenders = [path.name for path in sorted((ROOT / "tests").glob("*.py"))
-                 if pattern.search(path.read_text(encoding="utf-8"))]
+    # 예전 패턴은 `Path("/...형제이름` 하나만 봤다. 좁게 잡은 이유는 기록돼 있었고
+    # 맞는 걱정이었다 — 첫 판이 `Path(__file__)`과 이 파일의 산문까지 잡았다.
+    #
+    # 그런데 좁힌 결과가 **한 가지 철자만** 잡는 상태였다. 2026-08-22에 재봤더니
+    # 이 셋이 전부 통과했다:
+    #
+    #     os.path.exists("/home/jovyan/work/agent-safety-core")
+    #     SIBLING = "/home/jovyan/work/agent-safety-core"
+    #     from pathlib import Path as P; P("/home/jovyan/work/agent-safety-core")
+    #
+    # 셋 다 이 검사가 막으려는 바로 그 실수다. 이제 **주석과 독스트링을 걷어낸 뒤**
+    # 기계 고유 경로가 문자열 리터럴로 들어 있는지 본다 — 걷어내기가 `Path(__file__)`
+    # 오탐과 산문 인용을 함께 없애므로, 넓히면서 정밀도를 잃지 않는다.
+    #
+    # 인용과 사용을 구분하는 이 방식은 이 저장소들이 이미 여러 번 쓴 것이다.
+    without_strings_of_prose = re.compile(r'("""|\'\'\')(?:.|\n)*?\1')
+    pattern = re.compile(r'["\'][^"\']*/home/[^"\']*agent-safety-core')
+    offenders = []
+    for path in sorted((ROOT / "tests").glob("*.py")):
+        text = without_strings_of_prose.sub('""', path.read_text(encoding="utf-8"))
+        text = "\n".join(re.sub(r"#.*$", "", line) for line in text.splitlines())
+        if pattern.search(text):
+            offenders.append(path.name)
     assert not offenders, f"hardcoded sibling paths in {offenders}"
 
 
