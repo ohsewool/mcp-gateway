@@ -144,3 +144,28 @@ jobs:
             echo "::error::nothing passed; this comparison would agree with any README."
             exit 1
           fi
+
+          # `collected`는 위에서 재놓고 **아무도 읽지 않았다** - 이 저장소들이
+          # 반복해서 잡아온 모양 그대로다. README의 세 번째 숫자("그때 N개는 아예
+          # 수집되지 않는다")가 바로 그 값에 달려 있고, 그 문장의 요점은 skip 수보다
+          # 수집되지 않는 수가 크다는 것이다. 재놓고 안 보면 그 요점이 틀려도 초록불이다.
+          claimed_total=$(grep -oE '코어가 있으면 [0-9]+개 전부 통과' README.md \
+            | grep -oE '[0-9]+')
+          claimed_uncollected=$(grep -oE '그때 [0-9]+개는 아예 수집되지 않는다' README.md \
+            | grep -oE '[0-9]+')
+          if [ -z "${claimed_total}" ] || [ -z "${claimed_uncollected}" ]; then
+            echo "::error::README에서 전체 수/미수집 수를 읽지 못했다. 문장이 바뀌었으면"
+            echo "이 비교는 아무것도 확인하지 않는다 - 빈 값으로 통과시키지 않는다."
+            exit 1
+          fi
+          measured_uncollected=$((claimed_total - collected))
+          echo "미수집: 측정 ${measured_uncollected} (${claimed_total} - ${collected}), README ${claimed_uncollected}"
+          if [ "${measured_uncollected}" != "${claimed_uncollected}" ]; then
+            echo "::error::README claims ${claimed_uncollected} tests are never collected; ${measured_uncollected} are."
+            exit 1
+          fi
+          if [ "${measured_uncollected}" -le "${skipped:-0}" ]; then
+            echo "::error::수집되지 않는 수(${measured_uncollected})가 skip 수(${skipped})보다 크지 않다."
+            echo "README 문장의 요점이 그것이다. 숫자만 맞추지 말고 문장을 고쳐라."
+            exit 1
+          fi
