@@ -108,3 +108,24 @@ class TestTheCheckIsNotVacuous:
     def test_the_phrase_list_is_not_empty(self):
         """`STALE = ()`는 모든 문서를 통과시키면서 검사처럼 보인다."""
         assert len(STALE) >= 3
+
+
+class TestAMentionIsNotADeclaration:
+    """관례를 **설명하는 문장**이 문서를 면제시키면 안 된다.
+
+    `modelmate`에서 그 일이 벌어졌다(2026-08-22). 정규식 사본이 파일마다 있으므로
+    대조도 파일마다 있어야 한다 — 여기서 느슨하게 되돌려도 다른 파일의 대조는
+    아무 말을 하지 않는다.
+    """
+
+    def test_a_prose_mention_does_not_exempt(self):
+        assert not declared_historical(
+            "# 제목\n\n관례는 `<!-- historical: 시점 -->`으로 적는다.\n")
+
+    def test_a_real_declaration_exempts(self):
+        assert declared_historical("# 제목\n<!-- historical: 2026-06 -->\n본문\n")
+
+    def test_a_declaration_far_down_does_not_count(self):
+        """문서 끝에 붙인 표시는 선언이 아니다 — 읽는 사람은 앞을 보고 판단한다."""
+        assert not declared_historical("# 제목\n" + "본문\n" * 40
+                                       + "<!-- historical: 2026-06 -->\n")
