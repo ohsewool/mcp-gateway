@@ -30,7 +30,7 @@ def _canonical_json(value: object) -> str:
             ensure_ascii=True,
             allow_nan=False,
         )
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError) as error:  # pragma: no cover - registry refuses first
         # Unreachable while the registry validates: `RegisteredServer` and
         # `RegisteredTool` refuse non-finite metadata at construction, so nothing
         # that reaches here can fail. Measured on 2026-08-22 by deleting this
@@ -41,7 +41,7 @@ def _canonical_json(value: object) -> str:
         # made some other way would need it. `tests/test_rejections_that_were_
         # never_fired.py` pins the outer check instead, so if the registry ever
         # stops validating, that test fails and this branch becomes live.
-        raise MetadataIntegrityError(  # pragma: no cover - registry refuses first
+        raise MetadataIntegrityError(
             "snapshot content must be finite JSON data") from error
 
 

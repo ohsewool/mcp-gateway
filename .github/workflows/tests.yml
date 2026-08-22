@@ -85,6 +85,22 @@ jobs:
       - name: Run the suite
         run: python -m pytest -q -rs   # -rs names every skip and why
 
+      - name: Refuse a line this suite never executes
+        # A coverage sweep on 2026-08-22 found 44 statements no test ever ran.
+        # Among them: every line of `HttpProxy._post`'s real network path - the
+        # three error translations this README promises are the same principle
+        # as the pipe's - and the whole of `python3 -m mcp_gateway.audit verify`,
+        # a command the README tells people to run.
+        #
+        # 100% is a gate, not a target. A new defensive branch either gets a test
+        # or gets `# pragma: no cover` with a reason beside it. Writing those
+        # reasons is how three of them turned out to be second layers over a
+        # first that already refuses.
+        run: |
+          pip install -q coverage
+          python -m coverage run --source=mcp_gateway -m pytest -q > /dev/null
+          python -m coverage report -m --fail-under=100
+
   # The README claims the gateway works without its sibling. That sentence had
   # never been run: the count in it was written once and left behind while the
   # total beside it was maintained. Measuring is cheap - not measuring is how a

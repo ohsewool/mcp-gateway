@@ -56,9 +56,15 @@ def _copy_json_object(value: Mapping[str, Any], field_name: str) -> dict[str, An
         raise RegistryValidationError(f"{field_name} must be a JSON object")
     try:
         copied = json.loads(_canonical_json(dict(value)))
-    except (TypeError, json.JSONDecodeError) as error:  # defensive for mappings
+    except (TypeError, json.JSONDecodeError) as error:  # pragma: no cover
+        # Unreachable: `_canonical_json` already translates every serialisation
+        # failure into RegistryValidationError, so neither exception escapes it.
+        # Measured on 2026-08-22 during a coverage sweep - these two lines and
+        # one in `metadata_integrity` were the package's last unexecuted
+        # statements, and both turned out to be second layers over a first that
+        # already refuses.
         raise RegistryValidationError(f"{field_name} must be a JSON object") from error
-    if not isinstance(copied, dict):
+    if not isinstance(copied, dict):  # pragma: no cover - a dict canonicalises to a dict
         raise RegistryValidationError(f"{field_name} must be a JSON object")
     return copied
 
