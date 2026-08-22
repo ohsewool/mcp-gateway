@@ -119,9 +119,16 @@ class TestNetworkFailures:
         assert "500" in str(error.value)
 
     def test_an_empty_body_is_refused(self):
+        """The message is pinned, not just the type. Without the empty-body check
+        the very next line calls `decode_frame("")`, which raises the same
+        `TransportError` with a different reason - so a type-only assertion passes
+        whether or not the check exists. Measured on 2026-08-22: deleting the check
+        left all 320 tests green. The test one line above already pinned its
+        message; the rule had split inside a single file."""
         with HttpProxy(interceptor(), ENDPOINT, opener=responder(empty=True)) as proxy:
-            with pytest.raises(TransportError):
+            with pytest.raises(TransportError) as error:
                 proxy.request(call())
+        assert "empty body" in str(error.value)
 
     def test_a_mismatched_response_id_is_refused(self):
         """One request, one response: a wrong id cannot be attributed."""

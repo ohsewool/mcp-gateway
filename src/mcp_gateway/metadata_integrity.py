@@ -31,7 +31,18 @@ def _canonical_json(value: object) -> str:
             allow_nan=False,
         )
     except (TypeError, ValueError) as error:
-        raise MetadataIntegrityError("snapshot content must be finite JSON data") from error
+        # Unreachable while the registry validates: `RegisteredServer` and
+        # `RegisteredTool` refuse non-finite metadata at construction, so nothing
+        # that reaches here can fail. Measured on 2026-08-22 by deleting this
+        # raise - 320 tests stayed green - and then by trying to build a snapshot
+        # from NaN metadata, which the registry refuses first.
+        #
+        # Kept rather than deleted: a caller that builds a snapshot from records
+        # made some other way would need it. `tests/test_rejections_that_were_
+        # never_fired.py` pins the outer check instead, so if the registry ever
+        # stops validating, that test fails and this branch becomes live.
+        raise MetadataIntegrityError(  # pragma: no cover - registry refuses first
+            "snapshot content must be finite JSON data") from error
 
 
 def _json_value(value: object) -> object:
