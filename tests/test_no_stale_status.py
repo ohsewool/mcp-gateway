@@ -24,7 +24,25 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-HISTORICAL = re.compile(r"<!--\s*historical:")
+# **선언**과 **언급**은 다르다.
+#
+# 예전 정규식은 `<!--\s*historical:`을 파일 어디에서든 찾았다. 그래서 이 관례를
+# **설명하는 문장**이 있는 문서가 통째로 면제됐다. `modelmate`에서 실제로 그 일이
+# 벌어졌다(2026-08-22): README 349줄의 "…은 각자 `<!-- historical: -->`로 선언돼
+# 있다"는 한 문장이 **가장 많이 읽히는 문서를 모든 검사에서 빼버렸고**, 두 회차
+# 동안 아무도 몰랐다. 다시 넣자마자 가려져 있던 죽은 링크 둘이 나왔다.
+#
+# 여기 문서들은 지금 그 상태가 아니다 — 재봤고, 언급만으로 면제된 문서는 없다.
+# 장치가 같으므로 미리 고친다. 진짜 선언은 **줄 시작에, 문서 앞쪽에** 있다.
+HISTORICAL = re.compile(r"^\s*<!--\s*historical:", re.MULTILINE)
+DECLARATION_WITHIN_LINES = 15
+
+
+def declared_historical(text: str) -> bool:
+    """문서 앞쪽에 줄 시작으로 놓인 선언만 인정한다."""
+    head = "\n".join(text.splitlines()[:DECLARATION_WITHIN_LINES])
+    return bool(HISTORICAL.search(head))
+
 SKIP = {".git", "node_modules", "__pycache__", "archive"}
 
 # 착수 시점 템플릿이 남긴 문장들. 원문을 인용하는 것은 이 검사의 일부다 -
@@ -46,7 +64,7 @@ def documents() -> list[Path]:
 
 def living() -> list[Path]:
     return [path for path in documents()
-            if not HISTORICAL.search(path.read_text(encoding="utf-8", errors="replace"))]
+            if not declared_historical(path.read_text(encoding="utf-8", errors="replace"))]
 
 
 def test_no_living_document_says_nothing_has_been_done():
@@ -79,13 +97,13 @@ class TestTheCheckIsNotVacuous:
                        encoding="utf-8")
         text = doc.read_text(encoding="utf-8")
         assert any(phrase in text for phrase in STALE)
-        assert not HISTORICAL.search(text)
+        assert not declared_historical(text)
 
     def test_a_declared_record_may_still_contain_it(self, tmp_path):
         doc = tmp_path / "d.md"
         doc.write_text("<!-- historical: 2026-06 -->\nThere are no empirical findings.",
                        encoding="utf-8")
-        assert HISTORICAL.search(doc.read_text(encoding="utf-8"))
+        assert declared_historical(doc.read_text(encoding="utf-8"))
 
     def test_the_phrase_list_is_not_empty(self):
         """`STALE = ()`는 모든 문서를 통과시키면서 검사처럼 보인다."""
