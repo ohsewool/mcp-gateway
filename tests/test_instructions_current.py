@@ -60,6 +60,30 @@ def test_the_instructions_point_at_something_that_exists():
     assert not missing, f"지시 파일이 없는 문서를 읽으라고 한다: {missing}"
 
 
+def test_the_instruction_file_does_not_carry_a_stale_test_count():
+    """지시 파일이 "지금 이 저장소에는 … 테스트 N개가 돈다"고 말한다.
+
+    2026-08-22에 재보니 세 저장소 모두 낡아 있었다 — `mcp-gateway` 239 대 320,
+    `rag-profile-selector` 243 대 317, `document-intelligence` 153 대 189.
+    **세 저장소 모두 이 파일을 읽는 검사가 이미 있었고**, 소진 표시와 문서 경로와
+    안전 제약을 봤지 **숫자는 아무도 보지 않았다.**
+
+    그 숫자는 "착수 단계는 끝났다"는 근거로 쓰인다. 근거로 쓰이는 숫자가 낡으면
+    읽는 사람은 저장소를 실제보다 작게 본다.
+
+    README의 값과 비교한다. README는 CI가 `--collect-only`로 재서 대조하므로,
+    여기를 README에 묶으면 세 곳이 한 값을 가리킨다 — **한 사실을 여러 곳에 적으면
+    전부 검사해야 한다**가 지난 회차의 결론이었다.
+    """
+    claimed = re.search(r"테스트 (\d+)개가 돈다", instructions_text())
+    assert claimed, "지시 파일에서 테스트 개수를 찾지 못했다. 문장이 바뀌었으면 여기도 고쳐라."
+    readme = re.search(r"# (\d+) tests", (ROOT / "README.md").read_text(encoding="utf-8"))
+    assert readme, "README에서 테스트 개수를 찾지 못했다"
+    assert int(claimed.group(1)) == int(readme.group(1)), (
+        f"AGENTS.md는 {claimed.group(1)}개, README는 {readme.group(1)}개라고 한다."
+    )
+
+
 class TestTheCheckIsNotVacuous:
     @pytest.mark.skipif(not INSTRUCTIONS.exists(), reason="AGENTS.md가 없다")
     def test_the_instruction_file_was_actually_read(self):

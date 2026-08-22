@@ -15,7 +15,7 @@
 
 ```bash
 pip install -e .                                   # src/ 레이아웃이라 설치 없이는 import되지 않는다
-python3 -m pytest tests/ -q                      # 320 tests
+python3 -m pytest tests/ -q                      # 321 tests
 python3 -m mcp_gateway.audit verify <log.jsonl>  # 감사 로그 검증
 python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 ```
@@ -56,7 +56,7 @@ python3 -m pytest tests/ -q -m "not integration" # 실서버 없이
 
 ## 코어와의 관계
 
-승인·lease·결과 기록은 이 저장소가 직접 구현하지 않고 [`agent-safety-core`](https://github.com/ohsewool/agent-safety-core)의 실행 원장에 위임한다. 게이트웨이는 `ExecutionAuthority` 포트만 알며, 원자적 lease 소비가 외부 호출보다 **먼저** durable commit된다는 보장이 "동일 lease는 최대 1회 dispatch"를 성립시킨다. 코어가 없으면 정책·무결성 계층만으로도 동작한다 — **이 문장도 돌려본 적이 없었다.** 확인해보니 다섯 개의 코어 의존 테스트 중 하나가 가드 없이 코어를 당겼고, 셋은 `/home/jovyan/work/agent-safety-core`라는 **한 기계의 절대 경로**로 가용성을 판단했다. 다른 기계에서는 그 경로가 없어 조용히 skip되고, 그 기계에서 패키지를 지우면 경로는 있는데 import가 실패해 에러가 난다. 지금은 **코어 없이 269개 통과·5개 skip**이고, 그때 48개는 아예 수집되지 않는다 — skip 수보다 **수집되지 않는 수**가 크다는 것이 이 문장의 요점이다. 코어가 있으면 320개 전부 통과한다. 이 세 숫자는 CI가 재서 README와 대조한다(`tests` 워크플로의 `without-core` 잡). **손으로 적어둔 앞 숫자는 139였고, 그동안 총 개수만 갱신되고 이쪽은 방치돼 있었다** — 워크플로 주석은 또 다른 값(35)을 말하고 있었다. 한 저장소가 같은 사실에 대해 서로 다른 세 숫자를 들고 있었다.
+승인·lease·결과 기록은 이 저장소가 직접 구현하지 않고 [`agent-safety-core`](https://github.com/ohsewool/agent-safety-core)의 실행 원장에 위임한다. 게이트웨이는 `ExecutionAuthority` 포트만 알며, 원자적 lease 소비가 외부 호출보다 **먼저** durable commit된다는 보장이 "동일 lease는 최대 1회 dispatch"를 성립시킨다. 코어가 없으면 정책·무결성 계층만으로도 동작한다 — **이 문장도 돌려본 적이 없었다.** 확인해보니 다섯 개의 코어 의존 테스트 중 하나가 가드 없이 코어를 당겼고, 셋은 `/home/jovyan/work/agent-safety-core`라는 **한 기계의 절대 경로**로 가용성을 판단했다. 다른 기계에서는 그 경로가 없어 조용히 skip되고, 그 기계에서 패키지를 지우면 경로는 있는데 import가 실패해 에러가 난다. 지금은 **코어 없이 270개 통과·5개 skip**이고, 그때 48개는 아예 수집되지 않는다 — skip 수보다 **수집되지 않는 수**가 크다는 것이 이 문장의 요점이다. 코어가 있으면 321개 전부 통과한다. 이 세 숫자는 CI가 재서 README와 대조한다(`tests` 워크플로의 `without-core` 잡). **손으로 적어둔 앞 숫자는 139였고, 그동안 총 개수만 갱신되고 이쪽은 방치돼 있었다** — 워크플로 주석은 또 다른 값(35)을 말하고 있었다. 한 저장소가 같은 사실에 대해 서로 다른 세 숫자를 들고 있었다.
 
 ## 자식 서버의 환경
 
