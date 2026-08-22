@@ -96,9 +96,15 @@ jobs:
         # or gets `# pragma: no cover` with a reason beside it. Writing those
         # reasons is how three of them turned out to be second layers over a
         # first that already refuses.
+        #
+        # `--branch`, added a day later: a statement gate says every line ran,
+        # not that every `if` went both ways. Re-measuring found five arcs no
+        # test had taken - four of them the "input is not the shape we expect"
+        # side, which is the side that decides whether a failure is reported or
+        # the gateway simply crashes.
         run: |
           pip install -q coverage
-          python -m coverage run --source=mcp_gateway -m pytest -q > /dev/null
+          python -m coverage run --branch --source=mcp_gateway -m pytest -q > /dev/null
           python -m coverage report -m --fail-under=100
 
   # The README claims the gateway works without its sibling. That sentence had

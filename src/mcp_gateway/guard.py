@@ -51,8 +51,13 @@ class ExecutionAuthority(Protocol):
 
     def claim_lease(self, lease_id: str, *, scope_digest: str) -> str | None: ...
 
-    def record_outcome(self, execution_id: str, *, state: str,
-                       evidence: Mapping[str, Any]) -> None: ...
+    def record_outcome(self, execution_id: str, *,  # pragma: no branch - a Protocol body
+                       state: str, evidence: Mapping[str, Any]) -> None: ...
+    # `...` in a Protocol is a declaration, not code. Branch coverage records the
+    # arc "this function was entered and returned" and it never is, because the
+    # body belongs to whatever implements the port. The two one-line siblings
+    # above do not show up only because their `...` shares a line with the `def`.
+    # Measured 2026-08-22 while raising the gate from statement to branch.
 
 
 def canonical_digest(value: Any) -> str:

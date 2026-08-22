@@ -475,3 +475,61 @@ class TestTheSmallBranches:
             reply = proxy.request(call(), timeout=0.1)
         assert reply["error"]["code"] == CALL_TIMEOUT
         assert reply["error"]["data"]["outcome"] == "UNKNOWN"
+
+
+class TestTheBranchesNoTestEverTook:
+    """구문 커버리지 100%를 세운 다음 날 **분기**로 다시 쟀다.
+
+    줄이 전부 실행됐다는 것과 각 `if`가 양쪽으로 다 가봤다는 것은 다르다. 다섯 개의
+    부분 분기가 나왔고, 그중 넷은 **입력이 예상 모양이 아닐 때**의 갈래였다.
+    """
+
+    def test_a_record_without_an_integer_sequence_is_not_compared(self, tmp_path):
+        """순서 검사는 `sequence`가 정수일 때만 뜻이 있다. 문자열을 정수와 더하면
+        터지고, **검증기가 터지는 것은 위반을 보고하는 것이 아니다.**"""
+        from mcp_gateway.audit import verify_audit_log
+
+        path = audit_log_with(1, tmp_path)
+        line = path.read_text(encoding="utf-8").splitlines()[0]
+        path.write_text(line.replace('"sequence":1', '"sequence":"one"') + "\n",
+                        encoding="utf-8")
+        report = verify_audit_log(path)
+        assert not any("sequence jumped" in v.reason for v in report.violations)
+
+    def test_stripping_a_lease_from_a_call_without_arguments(self):
+        """`arguments`가 없는 호출에도 이 함수는 불린다. 없는 것을 지우려 들면
+        터지고, **전달 직전에 터지는 것은 차단이 아니다.**"""
+        from mcp_gateway.guard import ApprovalGuard
+
+        guard = ApprovalGuard(None, server_id=SERVER_ID, run_id="r1", actor_id="agent:a",
+                              consequential_tools=frozenset(), policy_digest="d")
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                   "params": {"name": "read_file"}}
+        assert guard.strip_lease(message) == message
+        assert guard.strip_lease({"jsonrpc": "2.0", "id": 1}) == {"jsonrpc": "2.0", "id": 1}
+
+    def test_a_tool_error_whose_content_is_not_a_list_is_still_a_failure(self):
+        """서버가 `isError`는 맞게 주고 `content`를 다른 모양으로 준 경우.
+        **오류라는 사실을 잃으면 실패가 성공으로 보고된다** — 여기서는 메시지만
+        비고 상태는 FAILED로 남아야 한다."""
+        from mcp_gateway.transport import _outcome_of
+
+        observed = _outcome_of({"result": {"isError": True, "content": "boom"}})
+        assert observed["state"] == "FAILED"
+        assert observed["evidence"]["message"] == ""
+
+    def test_exiting_a_proxy_whose_stdin_is_already_closed(self):
+        """서버가 먼저 죽어 stdin이 닫힌 뒤의 정리. 닫힌 것을 또 닫으려 들면
+        **정리 코드가 정리 중에 터진다.**"""
+        from mcp_gateway.transport import StdioProxy
+
+        class Dead:
+            stdin = None
+            def wait(self, timeout=None):
+                return 0
+            def kill(self):
+                raise AssertionError("죽일 필요가 없다")
+
+        proxy = StdioProxy(interceptor(), ["true"])
+        proxy._process = Dead()
+        assert proxy.__exit__(None, None, None) is None
